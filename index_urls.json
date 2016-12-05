@@ -1,0 +1,36 @@
+{
+    "mkt_index": {
+        "Nifty 50": "ind_nifty50list",
+        "Nifty Next 50": "ind_niftynext50list",        
+        "Nifty MC 50": "ind_niftymidcap50list",
+        "Nifty FF MidCap 100": "ind_niftyfreefloatmidcap100list",
+        "Nifty FF SmallCap 100": "ind_niftyfreefloatsmallcap_100",
+        "Nifty MidCap 150": "ind_niftymidcap150list",
+        "Nifty SmallCap 250": "ind_niftysmallcap250list",
+        "Nifty FF MidSmallCap 400": "ind_niftymidsmallcap400list",
+        "Nifty 500": "ind_nifty500list"        
+    },
+    "stg_index": {
+        "Nifty Alpha 50": "ind_nifty_Alpha_Index",
+        "Nifty High Beta 50": "nifty_High_Beta50_Index",
+        "Nifty Div Opp 50": "ind_niftydivopp50list",
+        "Nifty Growth Sectors 15": "ind_NiftyGrowth_Sectors15_Index",
+        "Nifty 100 Low Volatility 30": "nifty_Low_Volatility50_Index",
+        "Nifty Low Volatility 50": "nifty_Low_Volatility50_Index",
+        "Nifty Quality 30": "ind_niftyQuality30list",
+        "Nifty Value 20": "ind_Nifty50_Value20"
+    },
+    "sec_index": {
+        "Nifty Auto": "ind_niftyautolist",
+        "Nifty Bank": "ind_niftybanklist",
+        "Nifty FMCG": "ind_niftyfmcglist",
+        "Nifty Finance": "ind_niftyfinancelist",
+        "Nifty IT": "ind_niftyitlist",
+        "Nifty Media": "ind_niftymedialist",
+        "Nifty Metal": "ind_niftymetallist",
+        "Nifty PSU Bank": "ind_niftypsubanklist",
+        "Nifty Pharma": "ind_niftypharmalist",
+        "Nifty Private Bank": "ind_nifty_privatebanklist",
+        "Nifty Realty": "ind_niftyrealtylist"
+    }
+}
