@@ -21,21 +21,11 @@ SYMBOL_DATA_PATH = 'symbol_data.h5'
 INDEX_DATA_PATH = 'index_data.h5'
 TEMP_DATA_PATH = 'temp_data.h5'
 
-# Schema for required dataframes
-HIST_SYMBOL_SCHEMA = ['symbol', 'date', 'prev_close', 'open', 'high',
-                      'low', 'last', 'close', 'vwap', 'volume',
-                      'turnover', 'pct_deliverble', 'simple_returns',
-                      'log_returns', 'daily_volatility']
-DIVIDEND_SCHEMA = ['symbol', 'date', 'action', 'value']
-TECH_STRENGTH_SCHEMA = ['date', 'symbol', 'tech_strength']
-BETA_SCHEMA = ['symbol', 'benchmark', 'interval',
-               'alpha', 'beta', 'std_dev', 'r_square', 'p_value', 'std_error']
 
 # Constants
 TODAY = datetime.combine(datetime.today().date(), datetime.min.time())
 INDEX_META = pd.read_hdf('constants.h5', 'index_meta')
 INDUSTRY_META = pd.read_hdf('constants.h5', 'industry_meta')
-INDEX_LIST = pd.read_hdf('constants.h5', 'index_list')
 RISK_FREE_RATE = np.log(1 + 0.075) / 250
 
 
@@ -329,7 +319,7 @@ class Market(object):
         # If symbol_meta is not passed just send tech_strength
         if symbol_meta is None:
             tech_data_daily['date'] = pd.to_datetime(TODAY.date())
-            tech_data_daily = tech_data_daily[TECH_STRENGTH_SCHEMA]
+            tech_data_daily = tech_data_daily[['date', 'symbol', 'tech_strength']]
             return tech_data_daily
 
         tech_data_daily = tech_data_daily[[
