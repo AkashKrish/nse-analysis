@@ -180,10 +180,10 @@ class Symbol(Market):
         '''
 
         try:
-            hist_data = pd.read_hdf(SYMBOL_DATA_PATH, 'symbol_data_daily')
+            hist_data = pd.read_hdf(SYMBOL_DATA_PATH, 'symbol_hist_data')
         except Exception as e:
             self.force_load_data(force_load='symbol_hist')
-            hist_data = pd.read_hdf(SYMBOL_DATA_PATH, 'symbol_data_daily')
+            hist_data = pd.read_hdf(SYMBOL_DATA_PATH, 'symbol_hist_data')
 
         symbol_list = self.get_symbol_list(symbol_list=symbol_list,
                                            index=index, start=start,
@@ -261,15 +261,16 @@ class Symbol(Market):
             values = 'log_returns'
         try:
             data = pd.read_hdf(
-                SYMBOL_DATA_PATH, 'symbol_{0}'.format(values)
+                SYMBOL_DATA_PATH, 'symbol_data_{0}'.format(values)
             )
         except:
-            self.force_load_data(force_load='symbol_close', values=values)
+            self.force_load_data(force_load='symbol_data', values=values)
             data = pd.read_hdf(
-                SYMBOL_DATA_PATH, 'symbol_{0}'.format(values)
+                SYMBOL_DATA_PATH, 'symbol_data_{0}'.format(values)
             )
-
-        data = data[symbol_list.index]
+        column_list = data.columns
+        column_list = data.columns.intersection(symbol_list.index)
+        data = data[column_list]
         start = self.get_date(start, 'str', True)
         end = self.get_date(end, 'str', False)
         data = data[start:end]
@@ -419,7 +420,7 @@ class Symbol(Market):
 
             hist_data_temp = pd.read_hdf(TEMP_DATA_PATH, 'symbol_hist_data_temp')
             try:
-                hist_data = pd.read_hdf(SYMBOL_DATA_PATH, 'symbol_data_daily')
+                hist_data = pd.read_hdf(SYMBOL_DATA_PATH, 'symbol_hist_data')
             except:
                 hist_data = pd.DataFrame(columns=hist_data_temp.columns)
 
@@ -436,7 +437,7 @@ class Symbol(Market):
                 'volume', 'turnover', 'pct_deliverble'
             ]
             hist_data = hist_data.reset_index()[hist_symbol_schema]
-            hist_data.to_hdf(SYMBOL_DATA_PATH, 'symbol_data_daily')
+            hist_data.to_hdf(SYMBOL_DATA_PATH, 'symbol_hist_data')
             self.update_symbol_meta_dates()
             hist_data_columns = [
                 'open', 'high', 'low', 'last', 'close', 'vwap',
@@ -492,21 +493,22 @@ class Symbol(Market):
 
         elif force_load == 'symbol_data':
             print('Generating time series data for {0} from local data'.format(values))
-            hist_data = self.get_symbol_hist(start='1990')
+            hist_data = self.get_symbol_hist(symbol_list=self.symbol_meta.from_date)
 
             data = pd.pivot_table(data=hist_data, index='date',
                                   columns='symbol', values=values)
-            data.to_hdf(SYMBOL_DATA_PATH, 'symbol_{0}'.format(values))
+            data.to_hdf(SYMBOL_DATA_PATH, 'symbol_data_{0}'.format(values))
         elif force_load == 'all':
             self.force_load_data('symbol_meta')
             self.force_load_data('symbol_hist')
             self.force_load_data('symbol_dividend')
             self.force_load_data('symbol_tech')
+        print(force_load)
         clean_file(SYMBOL_DATA_PATH)
 
     def __init__(self, symbol_list=None, index=None,
                  null_count=None, start=None, end=None, min_rows=None,
-                 force_load=False, volume=None, mcap=None):
+                 force_load=None, volume=None, mcap=None):
         '''
         Symbol Object containing all the necessary methods
         for handling symbol related functions
