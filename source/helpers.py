@@ -82,3 +82,26 @@ def clean_file(path):
         temp.to_hdf('temp_data.h5', frame[1:])
     os.remove(path)
     os.rename(src='temp_data.h5', dst=path)
+
+
+def export_csv(path, key=None):
+    '''Clean file to recreate all dataframes in the path file'''
+    try:
+        keys = get_store_keys(path)
+    except:
+        warnings.warn(
+            'path file does not exist'
+        )
+        return
+    if key is not None:
+        try:
+            data = pd.read_hdf(path, key)
+        except Exception as e:
+            warnings.warn(
+                'Unable to read specified key from path due to {0}'.format(e)
+            )
+        data.to_csv(key + '.csv')
+        return
+    for frame in keys:
+        data = pd.read_hdf(path, frame[1:])
+        data.to_csv(frame[1:] + '.csv')
