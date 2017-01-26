@@ -26,7 +26,12 @@ TEMP_DATA_PATH = 'temp_data.h5'
 TODAY = datetime.combine(datetime.today().date(), datetime.min.time())
 INDEX_META = pd.read_hdf('constants.h5', 'index_meta')
 INDUSTRY_META = pd.read_hdf('constants.h5', 'industry_meta')
-RISK_FREE_RATE = np.log(1 + 0.075) / 250
+RISK_FREE_RATE = pd.read_hdf('constants.h5', 'risk_free_rate')
+RISK_FREE_RATE_D = RISK_FREE_RATE['D'].resample('D').mean()
+RISK_FREE_RATE_W = RISK_FREE_RATE['W'].resample('W').mean()
+RISK_FREE_RATE_M = RISK_FREE_RATE['M'].resample('M').mean()
+RISK_FREE_RATE_Q = RISK_FREE_RATE['Q'].resample('Q').mean()
+RISK_FREE_RATE_A = RISK_FREE_RATE['A'].resample('A').mean()
 
 
 class Market(object):
@@ -117,28 +122,26 @@ class Market(object):
                 'Atleast one of symbol list of returns should be passed'
             )
 
-    def fetch_index_list_symbols(self, req_index):
+    def fetch_index_list_of_symbols(self, index):
         '''
         Fetch list of symbols in req_index
         '''
-        index = req_index.Index
-        url = req_index.url
+        index = index
+        url = INDEX_META.loc[index, 'url']
         r = requests.get(INDEX_URL.format(url))
         try:
             index_data = pd.read_csv(StringIO(r.text), index_col='Symbol')
             if index_data.empty:
                 warnings.warn('No data recieved for {0} index'.format(index))
                 return pd.Datafame()
-            else:
-                print('Data loaded for {0} index'.format(index))
         except Exception as e:
             warnings.warn(
                 'Unable to get index meta for {0} index'.format(index)
             )
             return pd.Datafame()
         rename_columns(index_data)
-        index_data[index] = True
-        return index_data[index]
+        index_data.index = index_data.index.str.lower()
+        return index_data
 
     def fetch_symbol_meta(self):
         '''
@@ -151,24 +154,21 @@ class Market(object):
         symbol_meta['from_date'] = pd.to_datetime('1994-01-01')
         symbol_meta['to_date'] = pd.to_datetime('1994-01-01')
         symbol_meta['row_count'] = np.nan
-        symbol_meta['industry'] = 0
-        symbol_meta['mcap'] = 0
-        symbol_meta['p_e_ratio'] = 0
         symbol_meta = symbol_meta[(symbol_meta['series'] == 'EQ')]
-        symbol_meta = symbol_meta[['name_of_company', 'date_of_listing',
-                                   'from_date', 'to_date', 'row_count',
-                                   'industry', 'mcap', 'p_e_ratio']]
+        symbol_meta = symbol_meta[['name_of_company', 'isin_number', 'date_of_listing',
+                                   'from_date', 'to_date', 'row_count'
+                                   ]]
         symbol_meta.date_of_listing = pd.to_datetime(symbol_meta.date_of_listing)
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            for index in INDEX_META.itertuples():
-                p = executor.submit(self.fetch_index_list_symbols, index)
-                res = p.result()
-                if not res.empty:
-                    symbol_meta = symbol_meta.join(res)
-        symbol_meta.fillna(value=False, inplace=True)
         symbol_meta.index = symbol_meta.index.str.lower()
         symbol_meta = symbol_meta.sort_index()
+        edelweiss_list = pd.read_hdf('edelweiss.h5', 'list')
+        edelweiss_list = edelweiss_list[[
+            'sector', 'mcap', 'pe_ratio', 'div_yield',
+            'promoter_holding', 'fii_holding', 'dii_mf_holding',
+            'others_holding'
+        ]]
+        symbol_meta = symbol_meta.join(edelweiss_list)
+
         return symbol_meta
 
     def fetch_historical_data(self, symbol, start=None):
@@ -194,7 +194,7 @@ class Market(object):
                            nse_data.index.max())
                 )
             nse_data.drop(
-                ['Series', 'Trades', 'Deliverable Volume'], 1, inplace=True
+                ['Series', 'Deliverable Volume'], 1, inplace=True
             )
             nse_data.index = pd.to_datetime(nse_data.index)
         except Exception as e:
@@ -383,23 +383,35 @@ class Market(object):
                 'Index returns must be a series or dataframe only'
             )
 
-    def set_risk_free_rate(self, returns, risk_free_rate=RISK_FREE_RATE):
-        index = returns.index
-        if isinstance(index, pd.DatetimeIndex):
-            pass
-        else:
-            raise ValueError('Invalid index of returns')
-        if index.inferred_freq is None:
-            if (returns.index[1] - returns.index[0]).days < 10:
-                n = returns.resample('A').count().max(axis=1).max()
-                n = int(np.maximum(n, 252))
-                risk_free_rate = np.log(1 + risk_free_rate) / n
+    def set_risk_free_rate(self, returns):
+        returns = pd.DataFrame(returns).copy()
+        freq = str(returns.index.inferred_freq)[0]
+        interval = 248
+        if freq == 'N':
+            if len(returns) <= 1:
+                risk_free_rate = RISK_FREE_RATE_A
+                interval = 1
+            elif (returns.index[1] - returns.index[0]).days < 10:
+                interval = 248
+                risk_free_rate = RISK_FREE_RATE_D
             else:
-                pass
-        elif str(index.inferred_freq)[0] == 'W':
-            risk_free_rate = np.log(1 + risk_free_rate) / 54
-        elif str(index.inferred_freq)[0] == 'M':
-            risk_free_rate = np.log(1 + risk_free_rate) / 12
-        elif str(index.inferred_freq)[0] == 'Q':
-            risk_free_rate = np.log(1 + risk_free_rate) / 4
-        return risk_free_rate
+                interval = 1
+                risk_free_rate = RISK_FREE_RATE_A
+        elif freq == 'W':
+            interval = 52
+            risk_free_rate = RISK_FREE_RATE_W
+        elif freq == 'M':
+            interval = 12
+            risk_free_rate = RISK_FREE_RATE_M
+        elif freq == 'Q':
+            interval = 4
+            risk_free_rate = RISK_FREE_RATE_Q
+        elif freq == 'A':
+            interval = 1
+            risk_free_rate = RISK_FREE_RATE_A
+        else:
+            interval = 248
+            risk_free_rate = RISK_FREE_RATE_D
+        for symbol in returns.columns:
+            returns[symbol] = risk_free_rate
+        return returns, interval

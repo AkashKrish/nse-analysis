@@ -25,44 +25,46 @@ TODAY = datetime.combine(datetime.today().date(), datetime.min.time())
 
 class Symbol(Market):
 
-    def index_to_symbol_list(self, index, type='union'):
-        symbol_meta = self.get_symbol_meta()
-
-        if isinstance(index, list):
-            if type == 'union':
-                slist_temp = pd.DataFrame()
-                for ind in index:
-                    if ind not in symbol_meta.columns:
-                        warnings.warn('Index not available in symbol meta')
-                        raise KeyError
-                    symbol_list = symbol_meta[symbol_meta[ind]]
-                    slist_temp = pd.DataFrame(index=slist_temp.index.union(symbol_list.index))
-                symbol_list = symbol_meta.ix[slist_temp.index, 'from_date']
-            elif type == 'intersection':
-                slist_temp = pd.DataFrame(index=symbol_meta.index)
-                for ind in index:
-                    if ind not in symbol_meta.columns:
-                        warnings.warn('Index not available in symbol meta')
-                        raise KeyError
-                    symbol_list = symbol_meta[symbol_meta[ind]]
-                    slist_temp = pd.DataFrame(index=slist_temp.index.intersection(symbol_list.index))
-                symbol_list = symbol_meta.ix[slist_temp.index, 'from_date']
-            else:
-                raise ValueError('Invalid type specified')
-        elif isinstance(index, 'str'):
-            try:
-                symbol_list = symbol_meta.from_date[symbol_meta[index]]
-            except:
-                warnings.warn(
-                    'Invalid index passed as string, loading nifty_50 symbol list'
+    def get_symbol_index(self, index_type='all'):
+        if isinstance(index_type, str):
+            if index_type == 'all':
+                index_symbol_list = self.get_symbol_index(
+                    ['mkt_index', 'sec_index', 'stg_index', 'thematic_index']
                 )
-                symbol_list = symbol_meta.from_date[symbol_meta['nifty_50']]
-        else:
-            warnings.warn(
-                'Invalid value passed as index, loading nifty_50 symbol list'
-            )
-            symbol_list = symbol_meta.from_date[symbol_meta['nifty_50']]
-        return symbol_list
+            else:
+                try:
+                    index_symbol_list = pd.read_hdf(SYMBOL_DATA_PATH, index_type)
+                except:
+                    self.force_load_data(force_load='index_to_symbol')
+                    index_symbol_list = pd.read_hdf(SYMBOL_DATA_PATH, index_type)
+        elif isinstance(index_type, list):
+            index_symbol_list = pd.DataFrame()
+            for index_type_element in index_type:
+                temp_index_symbol_list = pd.read_hdf('symbol_data.h5', index_type_element)
+                if index_symbol_list.empty:
+                    index_symbol_list = temp_index_symbol_list
+                else:
+                    index_symbol_list = index_symbol_list.join(temp_index_symbol_list)
+            return index_symbol_list
+
+        return index_symbol_list
+ 
+    def index_to_symbol_list(self, index=None, index_type=None, fetch_type='union'):
+        if index_type is not None:
+            index_ = self.get_symbol_index(index_type)
+        elif index is not None:
+            index_ = self.get_symbol_index('all')
+            index_ = index_[index]
+            index_ = pd.DataFrame(index_)
+        col_list = index_.columns
+
+        # list to query
+        if fetch_type == 'union':
+            query = ' | '.join(col_list)
+        elif fetch_type == 'intersection':
+            query = ' & '.join(col_list)
+        symbol_list = index_.query(query)
+        return symbol_list.index.tolist()
 
     def get_symbol_list(self, symbol_list=None, index=None,
                         start=None, min_rows=None,
@@ -111,7 +113,6 @@ class Symbol(Market):
             symbol_list = symbol_list[symbol_list <= start]
 
         if index is not None:
-            index = index.lower().replace(' ', '_')
             symbol_list = self.index_to_symbol_list(index)
 
         if min_rows is not None:
@@ -119,10 +120,13 @@ class Symbol(Market):
             symbol_list = symbol_list[temp_smeta.row_count >= min_rows]
 
         if volume is not None:
-            hist_data = self.get_symbol_hist(symbol_list=symbol_list, start=start)
+            volume_data = self.get_symbol_data(data='volume', symbol_list=symbol_list, start=start)
+            volume_data = volume_data.min()
+            symbol_list = symbol_list[symbol_list.index.isin(volume_data.index)]
             symbol_list = symbol_list[
-                hist_data.groupby('symbol').aggregate({'volume': 'min'}).volume >= volume
+                volume_data >= volume
             ]
+
         if mcap is not None:
             temp_smeta = symbol_meta[symbol_meta.index.isin(symbol_list.index)]
             symbol_list = symbol_list[temp_smeta.mcap >= mcap]
@@ -275,11 +279,8 @@ class Symbol(Market):
         end = self.get_date(end, 'str', False)
         data = data[start:end]
         if null_count is not None:
-            data = data.interpolate(
-                method='time', limit=null_count,
-                limit_direction='backward'
-            )
-            symbols = data.columns[data.count() == len(data)]
+            data_na = data.fillna(0, limit=null_count)
+            symbols = data_na.columns[data_na.count() == len(data_na)]
             data = data[symbols]
         data = data.dropna(how='all', axis=1)
         return data
@@ -336,37 +337,6 @@ class Symbol(Market):
         symbol_list = symbol_meta.from_date[symbol_meta.industry.isin(industry)]
         return symbol_list
 
-    def describe_returns(self, returns):
-        returns_describe = returns.describe().T
-        returns_describe['count'] = returns_describe['count'].astype(int)
-        returns_describe = returns_describe.rename(
-            columns={
-                'count': 'num_returns',
-                'mean': 'mean_returns',
-                'std': 'std_dev',
-                'min': 'min_returns',
-                'max': 'max_returns',
-                '25%': '25_pctile',
-                '50%': '50_pctile',
-                '75%': '75_pctile'
-            })
-        percentiles = returns_describe.ix[:, 4:7].copy()
-        returns_describe = returns_describe.drop(percentiles.columns, axis=1)
-        returns_describe = returns_describe.join(returns.sum().rename('total_returns'))
-        returns_describe = returns_describe.join(returns.median().rename('median_returns'))
-
-        pos_pctile = pd.Series(name='pos_pctile')
-        for symbol in returns.columns:
-            symbol_ret = returns[symbol]
-            n = symbol_ret.count()
-            pos_pctile[symbol] = symbol_ret[symbol_ret > 0].count() / n
-        returns_describe = returns_describe.join(pos_pctile)
-
-        symbol_sharpe_ratio = returns.apply(self.sharpe_ratio)
-        returns_describe = returns_describe.join(symbol_sharpe_ratio.rename('sharpe_ratio'))
-        returns_describe = returns_describe.join(percentiles)
-        return returns_describe.round(4)
-
     def force_load_data(self, force_load, values=None):
         try:
             os.remove(TEMP_DATA_PATH)
@@ -376,23 +346,43 @@ class Symbol(Market):
         if force_load == 'symbol_meta':
             print('Loading Symbol Meta data from NSE website')
             symbol_meta = self.fetch_symbol_meta()
+
+            # Change date of listing of symbols if lower than Jan 1 1996
+            # to Jan 1 1996
             symbol_meta.ix[symbol_meta.date_of_listing < datetime(1996, 1, 1), 'date_of_listing'] = datetime(1996, 1, 1)
             symbol_meta.to_hdf(SYMBOL_DATA_PATH, 'symbol_meta')
-            # Update industry field
-            try:
-                self.fetch_tech_data(symbol_meta=symbol_meta)
-            except Exception as e:
-                warnings.warn(
-                    'Unable to connect to techpaisa site due to {0}'.format(e)
-                )
+
             # Update dates for symbol meta with dates from symbol_hist
             self.update_symbol_meta_dates()
+
+        elif force_load == 'index_to_symbol':
+            INDEX_META = pd.read_hdf('constants.h5', 'index_meta')
             symbol_meta = pd.read_hdf(SYMBOL_DATA_PATH, 'symbol_meta')
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                for index_type in INDEX_META.category.unique():
+                    index_type_data = pd.DataFrame(index=symbol_meta.index)
+                    index_list = INDEX_META.query(
+                        'category == "{0}"'.format(index_type)
+                    )['url']
+                    for index_name in index_list.index:
+                        index_data = executor.submit(self.fetch_index_list_of_symbols, index_name)
+                        index_data = index_data.result()
+                        if index_data.empty:
+                            continue
+                        index_data[index_name] = True
+                        index_data = index_data[index_name]
+                        print(
+                            'Updated index to symbol list for {0} index'.format(index_name)
+                        )
+                        index_type_data = index_type_data.join(index_data)
+                    index_type_data = index_type_data.fillna(False)
+                    with SafeHDFStore(SYMBOL_DATA_PATH) as store:
+                        store.put(index_type, value=index_type_data)
 
         elif force_load == 'symbol_hist':
             self.update_symbol_meta_dates()
             symbol_meta = self.get_symbol_meta()
-            date_diff = (TODAY - symbol_meta.to_date).days
+            date_diff = (TODAY - symbol_meta.to_date).dt.days
             symbol_meta = symbol_meta[
                 date_diff > 5 | (symbol_meta.row_count == 0)
             ]
@@ -503,11 +493,10 @@ class Symbol(Market):
             self.force_load_data('symbol_hist')
             self.force_load_data('symbol_dividend')
             self.force_load_data('symbol_tech')
-        print(force_load)
         clean_file(SYMBOL_DATA_PATH)
 
     def __init__(self, symbol_list=None, index=None,
-                 null_count=None, start=None, end=None, min_rows=None,
+                 start=None, end=None, min_rows=None,
                  force_load=None, volume=None, mcap=None):
         '''
         Symbol Object containing all the necessary methods

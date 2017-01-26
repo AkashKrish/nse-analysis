@@ -1,0 +1,60 @@
+1484763534721	geckodriver	INFO	Listening on 127.0.0.1:55140
+1484763536777	mozprofile::profile	INFO	Using profile path C:\Users\Akash\AppData\Local\Temp\rust_mozprofile.5gnhKca7SLdN
+1484763536787	geckodriver::marionette	INFO	Starting browser C:\Program Files (x86)\Mozilla Firefox\firefox.exe
+1484763537979	geckodriver::marionette	INFO	Connecting to Marionette on localhost:55173
+1484763540892	Marionette	INFO	Listening on port 55173
+JavaScript error: https://www.edelweiss.in/quotes/equity/Tata-Motors-Ltd-560, line 796: SyntaxError: expected expression, got '<'
+*************************
+A coding exception was thrown and uncaught in a Task.
+
+Full message: TypeError: NetworkError when attempting to fetch resource.
+Full stack: 
+*************************
+1484764281278	geckodriver	INFO	Listening on 127.0.0.1:64713
+1484764283145	mozprofile::profile	INFO	Using profile path C:\Users\Akash\AppData\Local\Temp\rust_mozprofile.KSytP8FrnH6d
+1484764283150	geckodriver::marionette	INFO	Starting browser C:\Program Files (x86)\Mozilla Firefox\firefox.exe
+1484764283170	geckodriver::marionette	INFO	Connecting to Marionette on localhost:64744
+1484764285212	Marionette	INFO	Listening on port 64744
+JavaScript error: https://www.edelweiss.in/quotes/equity/Infosys-Ltd-2806, line 796: SyntaxError: expected expression, got '<'
+*************************
+A coding exception was thrown and uncaught in a Task.
+
+Full message: TypeError: NetworkError when attempting to fetch resource.
+Full stack: 
+*************************
+[Child 345760] WARNING: pipe error: 109: file c:/builds/moz2_slave/m-rel-w32-00000000000000000000/build/src/ipc/chromium/src/chrome/common/ipc_channel_win.cc, line 346
+wlxfCxixmcx
+1484771913744	geckodriver::marionette	INFO	Starting browser C:\Program Files (x86)\Mozilla Firefox\firefox.exe
+1484771914965	geckodriver::marionette	INFO	Connecting to Marionette on localhost:57851
+1484771917667	Marionette	INFO	Listening on port 57851
+JavaScript error: https://www.edelweiss.in/quotes/equity/Infosys-Ltd-2806, line 796: SyntaxError: expected expression, got '<'
+*************************
+A coding exception was thrown and uncaught in a Task.
+
+Full message: TypeError: NetworkError when attempting to fetch resource.
+Full stack: 
+*************************
+JavaScript error: resource://gre/modules/commonjs/toolkit/loader.js -> resource://devtools/client/inspector/breadcrumbs.js, line 486: TypeError: this.handleMouseLeave is not a function
+72931382	geckodriver::marionette	INFO	Starting browser C:\Program Files (x86)\Mozilla Firefox\firefox.exe
+1484772931464	geckodriver::marionette	INFO	Connecting to Marionette on localhost:53646
+1484772933442	Marionette	INFO	Listening on port 53646
+JavaScript error: https://www.edelweiss.in/quotes/equity/Infosys-Ltd-2806, line 796: SyntaxError: expected expression, got '<'
+1484773042162	addons.productaddons	WARN	Failed downloading via XHR, status: 0, reason: error
+1484773042174	addons.productaddons	WARN	Failed downloading via XHR, status: 0, reason: error
+039307	geckodriver::marionette	INFO	Starting browser C:\Program Files (x86)\Mozilla Firefox\firefox.exe
+1484773039326	geckodriver::marionette	INFO	Connecting to Marionette on localhost:54996
+1484773041303	Marionette	INFO	Listening on port 54996
+JavaScript error: https://www.edelweiss.in/quotes/equity/Infosys-Ltd-2806, line 796: SyntaxError: expected expression, got '<'
+1484773128624	addons.productaddons	WARN	Failed downloading via XHR, status: 0, reason: error
+1484773128631	addons.productaddons	WARN	Failed downloading via XHR, status: 0, reason: error
+1484773128633	addons.productaddons	WARN	Failed downloading via XHR, status: 0, reason: error
+refox.exe
+1484773118373	geckodriver::marionette	INFO	Connecting to Marionette on localhost:55978
+1484773119606	Marionette	INFO	Listening on port 55978
+JavaScript error: https://www.edelweiss.in/quotes/equity/Infosys-Ltd-2806, line 796: SyntaxError: expected expression, got '<'
+*************************
+A coding exception was thrown and uncaught in a Task.
+
+Full message: TypeError: NetworkError when attempting to fetch resource.
+Full stack: 
+*************************
