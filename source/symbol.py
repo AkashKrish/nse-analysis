@@ -148,7 +148,7 @@ class Symbol(Market):
         # Update from_date, to_date, row_count fields
         symbol_meta = self.get_symbol_meta()
         try:
-            hist_data = pd.read_hdf(SYMBOL_DATA_PATH, 'symbol_data_daily')
+            hist_data = pd.read_hdf(SYMBOL_DATA_PATH, 'symbol_hist_data')
         except:
             symbol_meta['from_date'] = pd.to_datetime('1994-01-01')
             symbol_meta['to_date'] = pd.to_datetime('1994-01-01')
@@ -172,7 +172,6 @@ class Symbol(Market):
         symbol_meta['to_date'] = symbol_meta['to_date'].fillna(datetime(1994, 1, 1))
         symbol_meta['row_count'] = symbol_meta['row_count'].fillna(0).astype(int)
         symbol_meta.to_hdf(SYMBOL_DATA_PATH, 'symbol_meta')
-        clean_file(SYMBOL_DATA_PATH)
 
     def get_symbol_hist(self, symbol_list=None, index=None,
                         start=None, end=None,
@@ -384,7 +383,7 @@ class Symbol(Market):
             symbol_meta = self.get_symbol_meta()
             date_diff = (TODAY - symbol_meta.to_date).dt.days
             symbol_meta = symbol_meta[
-                date_diff > 5 | (symbol_meta.row_count == 0)
+                (date_diff > 5) | (symbol_meta.row_count == 0)
             ]
             print('Fetching Data from NSE website for {0} symbols'.format(len(symbol_meta)))
             try:
@@ -402,7 +401,13 @@ class Symbol(Market):
                     nse_data = symbol_executor.result()
                     if nse_data.empty:
                         continue
-                    nse_data['symbol'] = symbol.Index.lower()
+                    else:
+                        print(
+                            'Recieved {0} records from NSE for {1} from {2} to {3}'.
+                            format(len(nse_data), symbol.Index,
+                                   nse_data.date.min().date(),
+                                   nse_data.date.max().date())
+                        )
                     nse_data = nse_data[nse_data.date >= symbol.date_of_listing]
                     with SafeHDFStore(TEMP_DATA_PATH) as store:
                         store.put('symbol_hist_data_temp', value=nse_data, format='t',
@@ -493,7 +498,7 @@ class Symbol(Market):
             self.force_load_data('symbol_hist')
             self.force_load_data('symbol_dividend')
             self.force_load_data('symbol_tech')
-        clean_file(SYMBOL_DATA_PATH)
+        # clean_file(SYMBOL_DATA_PATH)
 
     def __init__(self, symbol_list=None, index=None,
                  start=None, end=None, min_rows=None,

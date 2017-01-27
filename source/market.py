@@ -186,13 +186,6 @@ class Market(object):
                     format(symbol, from_date.date(), to_date.date())
                 )
                 return nse_data
-            else:
-                print(
-                    'Recieved {0} records from NSE for {1} from {2} to {3}'.
-                    format(len(nse_data), symbol,
-                           nse_data.index.min(),
-                           nse_data.index.max())
-                )
             nse_data.drop(
                 ['Series', 'Deliverable Volume'], 1, inplace=True
             )
@@ -219,6 +212,7 @@ class Market(object):
 
         # Adjusting other columns for maintaining integrity
         nse_data.volume = nse_data.volume.astype(np.float)
+        nse_data.trades = nse_data.trades.astype(np.float)
         nse_data['pct_deliverble'] = nse_data['pct_deliverble'] * 100
         return nse_data
 
