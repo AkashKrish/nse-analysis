@@ -239,8 +239,8 @@ def force_load_data(force_load):
             for column in column_list:
                 company_info[column] = company_info[column].replace('N/A', np.nan).replace(' ', np.nan)
                 company_info[column] = company_info[column].replace('-', np.nan).replace('', np.nan)
-                company_info[column] = company_info[column].str.replace(' ','')
-                company_info[column] = company_info[column].str.replace('%','')
+                company_info[column] = company_info[column].str.replace(' ', '')
+                company_info[column] = company_info[column].str.replace('%', '')
 
                 import re
                 powers = {'T': 10 ** 12, 'B': 10 ** 9, 'M': 10 ** 6, 'K': 10 ** 3}
@@ -248,7 +248,7 @@ def force_load_data(force_load):
                 def string_to_numeric(num_str):
                     match = re.search(r"([0-9\.]+)\s?(M|B|K|T)", num_str)
                     if match is not None:
-                        quantity = match.group(1) 
+                        quantity = match.group(1)
                         magnitude = match.group(0)[-1]
                         return float(quantity) * powers[magnitude]
                     else:
@@ -258,7 +258,7 @@ def force_load_data(force_load):
             company_info.to_hdf(INVESTING_FILE_PATH, 'company_info')
         except Exception as e:
             warnings.warn(
-                'Unable to convert columns in company info due to {1}'.format( e)
+                'Unable to convert columns in company info due to {1}'.format(e)
             )
 
     elif force_load == 'hist_data':
