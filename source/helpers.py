@@ -1,5 +1,6 @@
 import os
 import warnings
+from datetime import datetime
 
 import pandas as pd
 from pandas import HDFStore
@@ -105,3 +106,26 @@ def export_csv(path, key=None):
     for frame in keys:
         data = pd.read_hdf(path, frame[1:])
         data.to_csv(frame[1:] + '.csv')
+
+
+def get_date(date=None, out='dt', start=True):
+    if date is None:
+        if start:
+            date = datetime(1996, 1, 1)
+        else:
+            date = datetime.combine(datetime.today().date(), datetime.min.time())
+    elif isinstance(date, str) and len(date) == 4:
+        date = datetime(int(date), 1, 1)
+    elif isinstance(date, str) and len(date) == 7:
+        date = datetime(int(date[0:4]), int(date[-2:]), 1)
+    elif isinstance(date, str) and len(date) == 10:
+        date = datetime.strptime(date, '%Y-%m-%d')
+    elif isinstance(date, int) and date > 1900:
+        date = datetime(date, 1, 1)
+    elif isinstance(date, datetime):
+        pass
+    else:
+        raise ValueError('Invalid Value for date')
+    if out == 'str':
+        date = date.strftime('%Y-%m-%d')
+    return date
