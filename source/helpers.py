@@ -3,6 +3,7 @@ import warnings
 from datetime import datetime
 
 import pandas as pd
+import numpy as np
 from pandas import HDFStore
 
 
@@ -129,3 +130,11 @@ def get_date(date=None, out='dt', start=True):
     if out == 'str':
         date = date.strftime('%Y-%m-%d')
     return date
+
+
+def get_daily_volatility(returns_series):
+        daily_volatility = pd.Series(0, index=returns_series.index,
+                                     name=returns_series.name + '_dv')
+        daily_volatility = np.sqrt(0.94 * np.square(daily_volatility) +
+                                   0.06 * np.square(returns_series))
+        return daily_volatility
