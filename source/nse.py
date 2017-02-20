@@ -24,16 +24,12 @@ class NSE(object):
     '''
 
     CURRENT_PATH = os.path.dirname(__file__)
-    SYMBOL_DATA_PATH = os.path.join(CURRENT_PATH, '.\\data\\symbol_data.h5')
+    SYMBOL_DATA_PATH = os.path.join(CURRENT_PATH, 'data/symbol_data.h5')
 
     INDEX_META_KEY = 'index_meta'
     SYMBOL_META_KEY = 'symbol_meta'
     EOD_DATA_KEY = 'eod_data'
     EOD_DATA_META_KEY = 'eod_data_meta'
-
-    TRADED_DATES = pd.read_hdf(
-        os.path.join(CURRENT_PATH, '.\\data\\constants.h5'), 'traded_dates'
-    )
 
     def fetch_symbol_meta(self):
         '''
@@ -170,8 +166,7 @@ class NSE(object):
 
     def get_symbol_list(
             self, symbol_list=None,
-            index=None, index_type=None,
-            start=None
+            index=None, index_type=None, start=None
     ):
         '''
         Get symbol list based on criteria provided.
@@ -294,6 +289,8 @@ class NSE(object):
         if force_load == 'symbol_meta':
             print('Loading Symbol Meta data from NSE website')
             symbol_meta = self.fetch_symbol_meta()
+            if not os.path.isdir(os.path.join(NSE.CURRENT_PATH, 'data')):
+                os.mkdir(os.path.join(NSE.CURRENT_PATH, 'data'))
             symbol_meta.to_hdf(NSE.SYMBOL_DATA_PATH, NSE.SYMBOL_META_KEY)
             self.force_load_data('index_components')
 
