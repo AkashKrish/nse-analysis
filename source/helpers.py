@@ -1,13 +1,16 @@
+'''Helper Methods for analysis'''
 import os
 import warnings
 from datetime import datetime
 
-import pandas as pd
 import numpy as np
-from pandas import HDFStore
+import pandas as pd
+
+CURRENT_PATH = os.path.dirname(__file__)
+TEMP_DATA_PATH = os.path.join(CURRENT_PATH, 'data{0}temp_data.h5'.format(os.sep))
 
 
-class SafeHDFStore(HDFStore):
+class SafeHDFStore(pd.HDFStore):
     '''
     Helper class for proper writing of data to H5 files
     while using multi-threads by making only one thread
@@ -25,14 +28,14 @@ class SafeHDFStore(HDFStore):
                                       os.O_WRONLY)
                 break
             except FileExistsError:
-                '''Delete lock on file'''
+                # Delete lock on file
                 import time
                 time.sleep(probe_interval)
 
-        HDFStore.__init__(self, *args, **kwargs)
+        pd.HDFStore.__init__(self, *args, **kwargs)
 
     def __exit__(self, *args, **kwargs):
-        HDFStore.__exit__(self, *args, **kwargs)
+        pd.HDFStore.__exit__(self, *args, **kwargs)
         os.close(self._flock)
         os.remove(self._lock)
 
@@ -46,17 +49,22 @@ def rename_columns(data):
                             for name in data.index.names]
 
 
-def num_missing(x, start='beginning'):
+def num_missing(series, start='beginning'):
+    '''Find number of mising values in a series'''
     if start == 'valid_index':
-        x = x[x.first_valid_index():]
-    return sum(x.isnull())
+        series = series[series.first_valid_index():]
+    return sum(series.isnull())
 
 
 def get_store_keys(path):
     '''Get keys in the provided H5 file path'''
-    store = pd.HDFStore(path)
-    keys = store.keys()
-    store.close()
+    if os.path.isfile(path):
+        store = pd.HDFStore(path)
+        keys = pd.Series(store.keys())
+        keys = keys.str[1:].tolist()
+        store.close()
+    else:
+        keys = []
     return keys
 
 
@@ -75,41 +83,39 @@ def clean_file(path):
             'path file does not exist'
         )
         return
-    try:
-        os.remove('temp_data.h5')
-    except:
-        pass
-    for frame in keys:
-        temp = pd.read_hdf(path, frame[1:])
-        temp.to_hdf('temp_data.h5', frame[1:])
+    if os.path.isfile(TEMP_DATA_PATH):
+        os.remove(TEMP_DATA_PATH)
+    store = pd.HDFStore(path)
+    keys = store.keys()
+    store.close()
+    for key in keys:
+        temp = pd.read_hdf(path, key)
+        temp.to_hdf(TEMP_DATA_PATH, key)
     os.remove(path)
-    os.rename(src='temp_data.h5', dst=path)
+    os.rename(src=TEMP_DATA_PATH, dst=path)
 
 
-def export_csv(path, key=None):
-    '''Clean file to recreate all dataframes in the path file'''
-    try:
+def export_csv(path, key):
+    '''Export data in HDFStore to csv in the path passed'''
+    if isinstance(key, list):
+        keys = key
+    elif isinstance(key, str) and key.lower() == 'all':
+        # Get all store keys from path
         keys = get_store_keys(path)
-    except:
-        warnings.warn(
-            'path file does not exist'
+    elif isinstance(key, str) and bool(key in keys):
+        keys = [key]
+    else:
+        raise KeyError(
+            'Invalid Key specified'
         )
-        return
-    if key is not None:
-        try:
-            data = pd.read_hdf(path, key)
-        except Exception as e:
-            warnings.warn(
-                'Unable to read specified key from path due to {0}'.format(e)
-            )
-        data.to_csv(key + '.csv')
-        return
-    for frame in keys:
-        data = pd.read_hdf(path, frame[1:])
-        data.to_csv(frame[1:] + '.csv')
+    directory_path = os.path.dirname(path)
+    for key in keys:
+        data = pd.read_hdf(path, key)
+        data.to_csv(directory_path+ os.sep + key + '.csv')
 
 
 def get_date(date=None, out='dt', start=True):
+    '''Generate date in proper format for "date" passed'''
     if date is None:
         if start:
             date = datetime(1996, 1, 1)
@@ -132,9 +138,12 @@ def get_date(date=None, out='dt', start=True):
     return date
 
 
-def get_daily_volatility(returns_series):
-        daily_volatility = pd.Series(0, index=returns_series.index,
-                                     name=returns_series.name + '_dv')
-        daily_volatility = np.sqrt(0.94 * np.square(daily_volatility) +
-                                   0.06 * np.square(returns_series))
-        return daily_volatility
+# def get_daily_volatility(returns_series):
+#     daily_volatility = pd.Series(
+#         0, index=returns_series.index,
+#         name=returns_series.name + '_dv'
+#     )
+#     daily_volatility = np.sqrt(
+#         0.94 * np.square(daily_volatility) + 0.06 * np.square(returns_series)
+#     )
+#     return daily_volatility

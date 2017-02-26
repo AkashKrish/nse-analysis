@@ -1,6 +1,6 @@
 '''Module for loading the symbol metadata'''  # noqa
-import re
 import os
+import re
 import warnings
 from datetime import datetime
 from io import StringIO
@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 # from dateutil.relativedelta import relativedelta
 from nsepy import get_history
 
-from helpers import get_daily_volatility, get_date, rename_columns
+from helpers import get_date, rename_columns, get_store_keys, clean_file
 
 # Constants
 TODAY = datetime.combine(datetime.today().date(), datetime.min.time())
@@ -24,17 +24,19 @@ class NSE(object):
     '''
 
     CURRENT_PATH = os.path.dirname(__file__)
-    SYMBOL_DATA_PATH = os.path.join(CURRENT_PATH, 'data/symbol_data.h5')
+    NSE_DATA_PATH = os.path.join(CURRENT_PATH, 'data{0}symbol_data.h5'.format(os.sep))
+    CONSTANTS_PATH = os.path.join(CURRENT_PATH, 'data{0}constants.h5'.format(os.sep))
 
     INDEX_META_KEY = 'index_meta'
     SYMBOL_META_KEY = 'symbol_meta'
     EOD_DATA_KEY = 'eod_data'
     EOD_DATA_META_KEY = 'eod_data_meta'
+    TRADED_DATES_KEY = 'traded_dates'
 
-    def fetch_symbol_meta(self):
-        '''
-        Method to grab symbol meta data from NSE website
-        '''
+    @classmethod
+    def fetch_symbol_meta(cls):
+        'Function to grab symbol meta data from NSE website'
+
         symbol_list_url = 'https://www.nseindia.com/content/equities/EQUITY_L.csv'
         response = requests.get(symbol_list_url)
         symbol_meta = pd.read_csv(StringIO(response.text), index_col='SYMBOL')
@@ -52,8 +54,10 @@ class NSE(object):
 
         return symbol_meta
 
-    def fetch_eod_data(self, symbol, start=None):
-        '''Fetch all End of Day(EOD) data from NSE'''
+    def fetch_eod_data(
+            self, symbol, start=None
+        ):
+        'Fetch all End of Day(EOD) data from NSE'
         from_date = get_date(start, start=True)
         to_date = get_date(start=False)
 
@@ -85,17 +89,44 @@ class NSE(object):
         eod_data = eod_data.drop_duplicates(
             subset=['symbol', 'date'], keep='last'
         )
-        eod_data = eod_data.set_index(['symbol', 'date'])
-        eod_data['high_low_spread'] = (eod_data.high - eod_data.low) / eod_data.low
-        eod_data['open_close_spread'] = (eod_data.close - eod_data.open) / eod_data.open
+
+        from_date = eod_data.date.min()
+        to_date = eod_data.date.max()
+        traded_dates = self.get_traded_dates(
+            start=from_date,
+            end=to_date
+        )
+        traded_dates = pd.DataFrame(index=traded_dates.index)
+        missing_dates = traded_dates.index.difference(eod_data.date)
+        eod_data = traded_dates.join(eod_data.set_index('date'), how='outer')
+        traded_dates = pd.DataFrame(index=eod_data.index)
+        traded_dates['date_count'] = [i+1 for i in range(len(traded_dates))]
+
+        if len(missing_dates) > 0:
+            for i in missing_dates:
+                date_count = traded_dates.loc[i]['date_count']
+                back_date = traded_dates[traded_dates.date_count == date_count-1].index.values[0]
+                next_first_valid_date = eod_data.loc[i:].symbol.first_valid_index()
+                if next_first_valid_date is None:
+                    next_first_valid_date = TODAY
+                if eod_data.loc[back_date, 'close'] == eod_data.loc[next_first_valid_date, 'prev_close']:
+                    close = eod_data.loc[back_date, 'close']
+                    eod_data.loc[i, ['symbol']] = symbol
+                    eod_data.loc[i, ['prev_close', 'open', 'high', 'low', 'last', 'close', 'vwap']] = close
+                    eod_data.loc[i, ['volume', 'turnover', 'trades', 'pct_deliverble']] = 0
+        missing_count = len(traded_dates) - eod_data.symbol.count()
+        if missing_count > 0:
+            warnings.warn(
+                ' {0} missing rows in {1}'.format(missing_count, symbol)
+            )
         eod_data['simple_returns'] = (
             (eod_data.close - eod_data.prev_close) / eod_data.prev_close
         )
         eod_data['log_returns'] = np.log(eod_data.close / eod_data.prev_close)
-        eod_data['daily_volatility'] = get_daily_volatility(eod_data.log_returns)
-
-        # Adjusting other columns for maintaining integrity
+        eod_data['high_low_spread'] = (eod_data.high - eod_data.low) / eod_data.low * 100
+        eod_data['open_close_spread'] = (eod_data.close - eod_data.open) / eod_data.open * 100
         eod_data['pct_deliverble'] = eod_data['pct_deliverble'] * 100
+        eod_data = eod_data.reset_index().set_index(['symbol', 'date'])
         eod_data = eod_data.astype(np.float)
         return eod_data
 
@@ -104,29 +135,46 @@ class NSE(object):
         If symbol meta data exists grab data from file.
         Else fetch symbol meta data from NSE website.
         '''
-        try:
-            symbol_meta = pd.read_hdf(NSE.SYMBOL_DATA_PATH, NSE.SYMBOL_META_KEY)
-        except:
+        if NSE.SYMBOL_META_KEY in get_store_keys(NSE.NSE_DATA_PATH):
+            symbol_meta = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.SYMBOL_META_KEY)
+        else:
             warnings.warn(
                 'Unable to read symbol_meta locally. Fetching data from NSE website'
             )
             self.force_load_data(force_load='symbol_meta')
-            symbol_meta = pd.read_hdf(NSE.SYMBOL_DATA_PATH, NSE.SYMBOL_META_KEY)
+            symbol_meta = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.SYMBOL_META_KEY)
         return symbol_meta
 
-    @classmethod
     def get_index_components(
-            cls, index=None, index_type=None, fetch_type='union'
+            self, index=None, index_type=None
         ):
-        'Retruns the symbols components of passed index or index_type'
-        index_meta = pd.read_hdf(NSE.SYMBOL_DATA_PATH, NSE.INDEX_META_KEY)
+        'Returns the symbols components of passed index or index_type'
+
+        if NSE.INDEX_META_KEY in get_store_keys(NSE.NSE_DATA_PATH):
+            index_meta = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.INDEX_META_KEY)
+        else:
+            warnings.warn(
+                'Unable to read symbol_meta locally. Fetching data from NSE website'
+            )
+            self.force_load_data(force_load='index_components')
+            index_meta = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.INDEX_META_KEY)
+
         index_meta = index_meta.replace('nan', np.nan)
+        index_meta = index_meta.dropna()
         index_type_list = index_meta.index_type.unique()
 
         if index is not None:
-            if isinstance(index_type, str):
-                index_list = [index]
-            if isinstance(index_type, list):
+            if isinstance(index, str) and index == 'all':
+                index_list = index_meta.index.tolist()
+            elif isinstance(index, str):
+                if index in index_meta.index:
+                    index_list = [index]
+                else:
+                    warnings.warn(
+                        'Could not find {0} index. Loading NIFTY 50'.format(index)
+                    )
+                    index_list = ['nifty_50']
+            elif isinstance(index, list):
                 index_list = index
         elif index_type is not None:
             if isinstance(index_type, str) and index_type == 'all':
@@ -148,26 +196,22 @@ class NSE(object):
         index_components = pd.DataFrame()
         for index_type in index_type_list:
             hdf_key = index_type + '_components'
-            temp_index_components = pd.read_hdf(NSE.SYMBOL_DATA_PATH, hdf_key)
+            temp_index_components = pd.read_hdf(NSE.NSE_DATA_PATH, hdf_key)
             temp_index_components = pd.DataFrame(temp_index_components)
             if index_components.empty:
                 index_components = temp_index_components
             else:
                 index_components = index_components.join(temp_index_components)
 
-        # list to query
-        if fetch_type == 'union':
-            query = ' | '.join(index_list)
-        elif fetch_type == 'intersection':
-            query = ' & '.join(index_list)
-        symbol_list = index_components.query(query)
-        symbol_list = symbol_list.index.tolist()
+        index_components = index_components[index_list].replace(False, np.nan)
+        index_components = index_components.dropna(how='all')
+        symbol_list = index_components.index.tolist()
         return symbol_list
 
     def get_symbol_list(
-            self, symbol_list=None,
-            index=None, index_type=None, start=None
-    ):
+            self, symbol_list=None, index=None, index_type=None, start=None,
+            min_rows=None, missing_count=None
+        ):
         '''
         Get symbol list based on criteria provided.
         Pass index for getting symbols in index.
@@ -176,7 +220,6 @@ class NSE(object):
         null_count: {True, False} load symbols listed before start date
         '''
         symbol_meta = self.get_symbol_meta()
-
         if symbol_list is None:
             try:
                 symbol_list = self.symbol_list
@@ -204,7 +247,6 @@ class NSE(object):
             symbol_list = symbol_meta.date_of_listing.copy()
 
         symbol_list = symbol_list.copy()
-
         if index is not None or index_type is not None:
             symbol_list_temp = self.get_index_components(
                 index=index, index_type=index_type
@@ -215,13 +257,13 @@ class NSE(object):
             start = get_date(start, 'dt')
             symbol_list = symbol_list[symbol_list <= start]
 
-        # if min_rows is not None:
-        #     symbol_data_meta = self.get_symbol_data_meta()
-        #     symbol_list = symbol_list[symbol_data_meta.row_count >= min_rows]
+        if min_rows is not None:
+            symbol_data_meta = self.get_symbol_data_meta()
+            symbol_list = symbol_list[symbol_data_meta.row_count >= min_rows]
 
-        # if null_count is not None:
-        #     symbol_data_meta = self.get_symbol_data_meta()
-        #     symbol_list = symbol_list[symbol_data_meta.missing_count >= null_count]
+        if missing_count is not None:
+            symbol_data_meta = self.get_symbol_data_meta()
+            symbol_list = symbol_list[symbol_data_meta.missing_count >= missing_count]
 
         # if volume is not None:
         #    volume_data = self.get_symbol_data(data='volume', symbol_list=symbol_list, start=start)
@@ -234,64 +276,164 @@ class NSE(object):
         # if mcap is not None:
         #     temp_smeta = symbol_meta[symbol_meta.index.isin(symbol_list.index)]
         #     symbol_list = symbol_list[temp_smeta.mcap >= mcap]
-        # return symbol_list
+        return symbol_list
 
-    def get_traded_dates(self):
-        'Generate Traded dates for NSE'
-        try:
-            eod_data = pd.read_hdf(NSE.SYMBOL_DATA_PATH, NSE.EOD_DATA_KEY)
-        except (FileNotFoundError, KeyError) as data_not_found:
-            print(data_not_found)
+    def get_eod_data(
+            self, symbol_list=None,
+            index=None, index_type=None, start=None, end=None,
+            min_rows=None, missing_count=None
+        ):
+        '''
+        If SYMBOL_DATA_PATH exists grab data from file.
+        Update data if data in the file is older than 5 days.
+        Else fetch symbol data from NSE website.
+        '''
+        if NSE.EOD_DATA_KEY in get_store_keys(NSE.NSE_DATA_PATH):
+            eod_data = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.EOD_DATA_KEY)
+            eod_data = eod_data.reset_index()
+        else:
+            self.force_load_data(force_load='eod_data')
+            eod_data = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.EOD_DATA_KEY)
+            eod_data = eod_data.reset_index()
 
+        symbol_list = self.get_symbol_list(
+            symbol_list=symbol_list, index=index, index_type=index_type,
+            start=start, missing_count=missing_count, min_rows=min_rows
+        )
+
+        eod_data = eod_data[eod_data.symbol.isin(symbol_list.index)]
+        start = get_date(start, out='dt', start=True)
+        end = get_date(end, out='dt', start=False)
+        eod_data = eod_data.ix[
+            (eod_data.date >= start) & (eod_data.date <= end)
+        ]
         return eod_data
 
+    def get_eod_column_data(
+            self, data='returns', symbol_list=None,
+            index=None, index_type=None, start=None, end=None,
+            min_rows=None, missing_count=None
+        ):
+        '''Get Close prices for historical as a separate dataframe'''
+
+        symbol_list = self.get_symbol_list(
+            symbol_list=symbol_list, index=index, index_type=index_type,
+            start=start, missing_count=missing_count, min_rows=min_rows
+        )
+        eod_data_schema = [
+            'symbol', 'date', 'prev_close', 'open', 'high',
+            'low', 'last', 'close', 'vwap',
+            'trades', 'volume', 'turnover', 'pct_deliverble',
+            'simple_returns', 'log_returns', 'high_low_spread', 'open_close_spread'
+        ]
+        if data in eod_data_schema:
+            values = data
+        elif data == 'returns':
+            values = 'log_returns'
+        elif data == 'deliverble':
+            values = 'pct_deliverble'
+        else:
+            warnings.warn(
+                'Invalid type of data requested. Returning returns data'
+            )
+            values = 'log_returns'
+        try:
+            data = pd.read_hdf(
+                NSE.NSE_DATA_PATH, 'eod_column_data_{0}'.format(values)
+            )
+        except:
+            self.force_load_data(force_load='eod_column_data', values=values)
+            data = pd.read_hdf(
+                NSE.NSE_DATA_PATH, 'eod_column_data_{0}'.format(values)
+            )
+        column_list = data.columns
+        column_list = data.columns.intersection(symbol_list.index)
+        data = data[column_list]
+        start = get_date(start, 'str', True)
+        end = get_date(end, 'str', False)
+        data = data[start:end]
+        data = data.dropna(how='all', axis=1)
+        return data
+
+    def get_traded_dates(self, start=None, end=None):
+        'Generate Traded dates for NSE'
+
+        if NSE.TRADED_DATES_KEY in get_store_keys(NSE.NSE_DATA_PATH):
+            traded_dates = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.TRADED_DATES_KEY)
+        else:
+            self.force_load_data('traded_dates')
+            traded_dates = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.TRADED_DATES_KEY)
+
+        start = get_date(start, 'str', True)
+        end = get_date(end, 'str', False)
+
+        traded_dates = traded_dates[start:end]
+        traded_dates['specific_date_count'] = [i+1 for i in range(len(traded_dates))]
+
+        return traded_dates
+
     def get_eod_data_meta(self, eod_data=None):
-        'Generate metadata for EOD Data'
+        'Calculate meta data for EOD Data'
         symbol_meta = self.get_symbol_meta()
-        eod_data_meta = pd.DataFrame(index=symbol_meta.index.copy())
+        eod_data_meta = pd.DataFrame(
+            index=symbol_meta.index.copy(),
+        )
 
         if eod_data is None:
-            try:
-                eod_data = pd.read_hdf(NSE.SYMBOL_DATA_PATH, NSE.EOD_DATA_KEY)
+            if NSE.EOD_DATA_META_KEY in get_store_keys(NSE.NSE_DATA_PATH):
+                eod_data_meta = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.EOD_DATA_META_KEY)
+                return eod_data_meta
+            elif NSE.EOD_DATA_KEY in get_store_keys(NSE.NSE_DATA_PATH):
+                eod_data = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.EOD_DATA_KEY)
                 eod_data = eod_data.reset_index()
-            except:
+            else:
                 eod_data_meta['from_date'] = pd.to_datetime('1994-01-01')
                 eod_data_meta['to_date'] = pd.to_datetime('1994-01-01')
                 eod_data_meta['row_count'] = 0
                 eod_data_meta['missing_count'] = np.inf
+                eod_data_meta['missing_dates'] = np.nan
                 return eod_data_meta
 
-        traded_dates = self.get_traded_dates()
-
         def counts(data):
+            '''Calculate count data'''
             data = data.set_index('date')
             name = data.symbol.unique()[0]
             count_data = pd.Series(name=name)
-            count_data['from_date'] = data.date.min()
-            count_data['to_date'] = data.date.max()
+            count_data['from_date'] = data.index.min()
+            count_data['to_date'] = data.index.max()
             count_data['row_count'] = len(data)
 
-            stock_specific_traded_dates = traded_dates.index.union(data.index)
-
+            traded_dates = self.get_traded_dates(
+                start=count_data['from_date'],
+                end=count_data['to_date']
+            )
+            missing_dates = traded_dates.index.difference(data.index)
+            count_data['missing_count'] = len(traded_dates) - len(data)
+            count_data['non_traded_dates'] = len(data.query('volume == 0'))
+            count_data['missing_dates'] = missing_dates.tolist()
             return count_data
+
         count_data = eod_data.groupby('symbol').apply(counts)
-        count_data = count_data.reset_index(1, drop=True)
-        symbol_meta['from_date'] = count_data['from_date']
-        symbol_meta['to_date'] = count_data['to_date']
-        symbol_meta['row_count'] = count_data['row_count']
-        symbol_meta['from_date'] = symbol_meta['from_date'].fillna(datetime(1994, 1, 1))
-        symbol_meta['to_date'] = symbol_meta['to_date'].fillna(datetime(1994, 1, 1))
-        symbol_meta['row_count'] = symbol_meta['row_count'].fillna(0).astype(int)
-        symbol_meta.to_hdf(NSE.SYMBOL_DATA_PATH, 'symbol_meta')
+        eod_data_meta = eod_data_meta.join(count_data)
+        eod_data_meta['from_date'] = eod_data_meta['from_date'].fillna(datetime(1994, 1, 1))
+        eod_data_meta['to_date'] = eod_data_meta['to_date'].fillna(datetime(1994, 1, 1))
+        eod_data_meta['row_count'] = eod_data_meta['row_count'].fillna(0).astype(int)
+        eod_data_meta['missing_count'] = eod_data_meta['missing_count'].fillna(np.inf).astype(np.float)
+        eod_data_meta['non_traded_dates'] = eod_data_meta['non_traded_dates'].fillna(np.inf).astype(np.float)
+
+        return eod_data_meta
 
     def force_load_data(self, force_load, values=None):
+        '''
+        Force loading helper method for saving data from NSE Website to local HDFStores
+        '''
 
         if force_load == 'symbol_meta':
             print('Loading Symbol Meta data from NSE website')
             symbol_meta = self.fetch_symbol_meta()
             if not os.path.isdir(os.path.join(NSE.CURRENT_PATH, 'data')):
                 os.mkdir(os.path.join(NSE.CURRENT_PATH, 'data'))
-            symbol_meta.to_hdf(NSE.SYMBOL_DATA_PATH, NSE.SYMBOL_META_KEY)
+            symbol_meta.to_hdf(NSE.NSE_DATA_PATH, NSE.SYMBOL_META_KEY)
             self.force_load_data('index_components')
 
         elif force_load == 'index_components':
@@ -429,100 +571,115 @@ class NSE(object):
                         )
                 index_components_data = index_components_data.fillna(False).astype(bool)
                 hdf_key = index_type_label + '_components'
-                index_components_data.to_hdf(NSE.SYMBOL_DATA_PATH, hdf_key)
+                index_components_data.to_hdf(NSE.NSE_DATA_PATH, hdf_key)
             symbol_meta['name_of_company'] = symbol_meta['name_of_company'].astype(str)
             symbol_meta['isin_number'] = symbol_meta['isin_number'].astype(str)
             symbol_meta['industry'] = symbol_meta['industry'].fillna('unknown')
             symbol_meta['industry'] = symbol_meta['industry'].str.lower().str.replace(' ', '_')
-            symbol_meta.to_hdf(NSE.SYMBOL_DATA_PATH, NSE.SYMBOL_META_KEY)
+            symbol_meta.to_hdf(NSE.NSE_DATA_PATH, NSE.SYMBOL_META_KEY)
             index_meta = index_meta.astype(str)
-            index_meta.to_hdf(NSE.SYMBOL_DATA_PATH, NSE.INDEX_META_KEY)
+            index_meta.to_hdf(NSE.NSE_DATA_PATH, NSE.INDEX_META_KEY)
 
-        elif force_load == 'historical_data':
-            # self.force_load_data(force_load='symbol_data_meta')
-            # symbol_meta = self.get_historical_data_meta()
-            # date_diff = (TODAY - symbol_meta.to_date).dt.days
-            # symbol_meta = symbol_meta[
-            #     (date_diff >= 5) | (symbol_meta.row_count == 0)
-            # ]
-            # print('Fetching Data from NSE website for {0} symbols'.format(len(symbol_meta)))
-            # try:
-            #     os.remove(TEMP_DATA_PATH)
-            # except:
-            #     pass
-            # # symbol_list = symbol_list[symbol_list.index.isin(['arvinfra'])]
-            # with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-            #     for symbol in symbol_meta.itertuples():
-            #         symbol_executor = executor.submit(
-            #             self.fetch_historical_data,
-            #             symbol=symbol.Index,
-            #             start=symbol.to_date
-            #         )
-            #         nse_data = symbol_executor.result()
-            #         if nse_data.empty:
-            #             continue
-            #         else:
-            #             print(
-            #                 'Recieved {0} records from NSE for {1} from {2} to {3}'.
-            #                 format(len(nse_data), symbol.Index,
-            #                        nse_data.date.min().date(),
-            #                        nse_data.date.max().date())
-            #             )
-            #         # nse_data = nse_data[nse_data.date >= symbol.date_of_listing]
-            #         with SafeHDFStore(TEMP_DATA_PATH) as store:
-            #             store.put('symbol_hist_data_temp', value=nse_data, format='t',
-            #                       append=True, min_itemsize={'symbol': 15})
+        elif force_load == 'traded_dates':
+            if NSE.EOD_DATA_KEY in get_store_keys(NSE.NSE_DATA_PATH):
+                eod_data = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.EOD_DATA_KEY)
+                eod_data = eod_data.reset_index()
+                traded_dates = eod_data.date.unique()
+                traded_dates = pd.to_datetime(traded_dates)
+            else:
+                traded_dates = pd.read_hdf(NSE.CONSTANTS_PATH, NSE.TRADED_DATES_KEY)
+                traded_dates = traded_dates.index
 
-            # hist_data_temp = pd.read_hdf(TEMP_DATA_PATH, 'symbol_hist_data_temp')
-            # try:
-            #     hist_data = pd.read_hdf(SYMBOL_DATA_PATH, 'symbol_hist_data')
-            #     hist_data = hist_data.reset_index()
-            # except:
-            #     hist_data = pd.DataFrame(columns=hist_data_temp.columns)
+            traded_dates = pd.read_hdf(NSE.CONSTANTS_PATH, NSE.TRADED_DATES_KEY)
+            traded_dates = pd.DataFrame(index=traded_dates.index)
+            traded_dates['date'] = traded_dates.index
+            traded_dates['date_count'] = [i+1 for i in range(len(traded_dates))]
+            traded_dates['day'] = traded_dates.date.dt.day
+            traded_dates['month'] = traded_dates.date.dt.month
+            traded_dates['year'] = traded_dates.date.dt.year
+            traded_dates['day_of_week'] = traded_dates.date.dt.dayofweek
+            traded_dates['day_of_year'] = traded_dates.date.dt.dayofyear
+            traded_dates['week_of_year'] = traded_dates.date.dt.week
+            traded_dates = traded_dates.drop(['date'], axis=1)
+            traded_dates.to_hdf(NSE.NSE_DATA_PATH, NSE.TRADED_DATES_KEY)
 
-            # hist_data = hist_data.append(hist_data_temp)
-            # del hist_data_temp
-            # os.remove(TEMP_DATA_PATH)
+        elif force_load == 'eod_data_meta':
+            if NSE.EOD_DATA_KEY in get_store_keys(NSE.NSE_DATA_PATH):
+                eod_data = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.EOD_DATA_KEY)
+                eod_data = eod_data.reset_index()
+            else:
+                eod_data = None
 
-            # hist_data = hist_data.drop_duplicates(['symbol', 'date'], keep='last')
-            # hist_data = hist_data.sort_values(['symbol', 'date'])
-            # hist_symbol_schema = [
-            #     'symbol', 'date', 'prev_close', 'open', 'high',
-            #     'low', 'last', 'close', 'vwap',
-            #     'simple_returns', 'log_returns', 'daily_volatility',
-            #     'trades', 'volume', 'turnover', 'pct_deliverble'
-            # ]
-            # hist_data = hist_data.reset_index()[hist_symbol_schema]
-            # hist_data = hist_data.set_index(['symbol', 'date'])
-            # hist_data.to_hdf(SYMBOL_DATA_PATH, 'symbol_hist_data')
-            # self.update_symbol_data_meta()
-            # hist_data_columns = [
-            #     'open', 'high', 'low', 'last', 'close', 'vwap',
-            #     'simple_returns', 'log_returns', 'daily_volatility',
-            #     'volume', 'turnover', 'pct_deliverble'
-            # ]
-            # for col in hist_data_columns:
-            #     self.force_load_data(force_load='symbol_data', values=col)
-            # clean_file(SYMBOL_DATA_PATH)
-            pass
+            eod_data_meta = self.get_eod_data_meta(eod_data)
+            eod_data_meta.to_hdf(NSE.NSE_DATA_PATH, NSE.EOD_DATA_META_KEY)
 
-        elif force_load == 'symbol_data_meta':
-            # TODO update this block like IIFL and modify update_symbol_data_meta similarly
-            symbol_data_meta = self.update_symbol_data_meta()
-            symbol_data_meta.to_hdf(NSE.SYMBOL_DATA_PATH, NSE.EOD_DATA_META_KEY)
+        elif force_load == 'eod_data':
+            eod_data_meta = self.get_eod_data_meta()
+            date_diff = (TODAY - eod_data_meta.to_date).dt.days
+            eod_data_meta = eod_data_meta[
+                (date_diff >= 5) | (eod_data_meta.row_count == 0)
+            ]
+            print('Fetching Data from NSE website for {0} symbols'.format(len(eod_data_meta)))
+            # eod_data_meta = eod_data_meta[eod_data_meta.index.isin(['arvinfra', 'infy', 'hindalco'])]
 
-        elif force_load == 'symbol_data':
-            pass
-            # print('Generating time series data for {0} from local data'.format(values))
-            # symbol_meta = self.get_symbol_meta()
-            # symbol_list = symbol_meta.index.tolist()
-            # hist_data = self.get_symbol_hist(symbol_list=symbol_list)
+            fresh_eod_data = pd.DataFrame()
+            for symbol in eod_data_meta.itertuples():
+                eod_data = self.fetch_eod_data(
+                    symbol=symbol.Index,
+                    start=symbol.to_date
+                )
+                if eod_data.empty:
+                    continue
+                else:
+                    eod_data = eod_data.reset_index()
+                    print(
+                        'Recieved {0} records from NSE for {1} from {2} to {3}'.
+                        format(len(eod_data), symbol.Index,
+                               eod_data.date.min().date(),
+                               eod_data.date.max().date())
+                    )
+                    fresh_eod_data = fresh_eod_data.append(eod_data)
 
-            # data = pd.pivot_table(data=hist_data, index='date',
-            #                       columns='symbol', values=values)
-            # data.to_hdf(SYMBOL_DATA_PATH, 'symbol_data_{0}'.format(values))
+            if NSE.EOD_DATA_KEY in get_store_keys(NSE.NSE_DATA_PATH):
+                old_eod_data = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.EOD_DATA_KEY)
+                old_eod_data = old_eod_data.reset_index()
+            else:
+                old_eod_data = pd.DataFrame()
+
+            fresh_eod_data = fresh_eod_data.append(old_eod_data)
+            del old_eod_data
+
+            fresh_eod_data = fresh_eod_data.drop_duplicates(['symbol', 'date'], keep='last')
+            fresh_eod_data = fresh_eod_data.sort_values(['symbol', 'date'])
+            eod_data_schema = [
+                'symbol', 'date', 'prev_close', 'open', 'high',
+                'low', 'last', 'close', 'vwap',
+                'trades', 'volume', 'turnover', 'pct_deliverble',
+                'simple_returns', 'log_returns', 'high_low_spread', 'open_close_spread'
+            ]
+            fresh_eod_data = fresh_eod_data.reset_index()[eod_data_schema]
+            fresh_eod_data = fresh_eod_data.set_index(['symbol', 'date'])
+            fresh_eod_data.to_hdf(NSE.NSE_DATA_PATH, NSE.EOD_DATA_KEY)
+            del fresh_eod_data
+            self.force_load_data('eod_data_meta')
+            eod_data_columns = [
+                'open', 'high', 'low', 'close', 'vwap',
+                'simple_returns', 'log_returns',
+                'high_low_spread', 'open_close_spread'
+            ]
+            for column in eod_data_columns:
+                self.force_load_data(force_load='eod_column_data', values=column)
+            clean_file(NSE.NSE_DATA_PATH)
+
+        elif force_load == 'eod_column_data':
+            print('Generating time series data for {0} from local data'.format(values))
+            eod_data = self.get_eod_data(symbol_list='all')
+
+            data = pd.pivot_table(data=eod_data, index='date',
+                                  columns='symbol', values=values)
+            data.to_hdf(NSE.NSE_DATA_PATH, 'eod_column_data_{0}'.format(values))
 
         elif force_load == 'all':
             self.force_load_data('symbol_meta')
-            self.force_load_data('index_components')
-            self.force_load_data('historical_data')
+            self.force_load_data('traded_dates')
+            self.force_load_data('eod_data')
