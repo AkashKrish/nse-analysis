@@ -3,7 +3,7 @@ import os
 import warnings
 from datetime import datetime
 
-import numpy as np
+# import numpy as np
 import pandas as pd
 
 CURRENT_PATH = os.path.dirname(__file__)
@@ -68,6 +68,17 @@ def get_store_keys(path):
     return keys
 
 
+def delete_key(path, key):
+    '''Delete "key" from HDFStore in "path"'''
+    keys = get_store_keys(path)
+    if key in keys:
+        store = pd.HDFStore(path)
+        del store[key]
+        store.close()
+    else:
+        raise KeyError('Key not present in path')
+
+
 def null_count_returns(data):
     '''Get null counts of columns'''
     total_nulls = data.apply(num_missing, start='valid_index')
@@ -76,12 +87,10 @@ def null_count_returns(data):
 
 def clean_file(path):
     '''Clean file to recreate all dataframes in the path file'''
-    try:
-        keys = get_store_keys(path)
-    except:
-        warnings.warn(
-            'path file does not exist'
-        )
+    print('Cleaning file {0}'.format(path))
+    keys = get_store_keys(path)
+    if len(keys) == 0:
+        print('No data present in path')
         return
     if os.path.isfile(TEMP_DATA_PATH):
         os.remove(TEMP_DATA_PATH)
@@ -136,14 +145,3 @@ def get_date(date=None, out='dt', start=True):
     if out == 'str':
         date = date.strftime('%Y-%m-%d')
     return date
-
-
-# def get_daily_volatility(returns_series):
-#     daily_volatility = pd.Series(
-#         0, index=returns_series.index,
-#         name=returns_series.name + '_dv'
-#     )
-#     daily_volatility = np.sqrt(
-#         0.94 * np.square(daily_volatility) + 0.06 * np.square(returns_series)
-#     )
-#     return daily_volatility
