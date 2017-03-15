@@ -1,60 +1,33 @@
 '''Module for loading data from NSE website'''
 import os
-import re
 import warnings
 from datetime import datetime
-from io import StringIO
 
 import numpy as np
 import pandas as pd
-import requests
-from bs4 import BeautifulSoup
-# from dateutil.relativedelta import relativedelta
 from nsepy import get_history
 
-from helpers import get_date, rename_columns, get_store_keys, clean_file
+from helpers import clean_file, get_date, get_store_keys, rename_columns
+from market import Market
 
 # Constants
 TODAY = datetime.combine(datetime.today().date(), datetime.min.time())
 
 
-class NSE(object):
+class NSE(Market):
     '''
     Module for NSE Data
     '''
 
-    CURRENT_PATH = os.path.dirname(__file__)
-    NSE_DATA_PATH = os.path.join(CURRENT_PATH, 'data{0}symbol_data.h5'.format(os.sep))
-    CONSTANTS_PATH = os.path.join(CURRENT_PATH, 'data{0}constants.h5'.format(os.sep))
+    __CURRENT_PATH = os.path.dirname(__file__)
+    __NSE_DATA_PATH = os.path.join(__CURRENT_PATH, 'data{0}nse_data.h5'.format(os.sep))
+    NSE_DATA_PATH = __NSE_DATA_PATH
+    __CONSTANTS_PATH = os.path.join(__CURRENT_PATH, 'data{0}constants.h5'.format(os.sep))
 
-    INDEX_META_KEY = 'index_meta'
-    SYMBOL_META_KEY = 'symbol_meta'
-    SYMBOL_EOD_DATA_KEY = 'symbol_eod_data'
-    SYMBOL_EOD_META_KEY = 'symbol_eod_meta'
-    INDEX_EOD_DATA_KEY = 'index_eod_data'
-    INDEX_EOD_META_KEY = 'index_eod_meta'
-    TRADED_DATES_KEY = 'traded_dates'
-
-    @classmethod
-    def fetch_symbol_meta(cls):
-        'Function to grab symbol meta data from NSE website'
-
-        symbol_list_url = 'https://www.nseindia.com/content/equities/EQUITY_L.csv'
-        response = requests.get(symbol_list_url)
-        symbol_meta = pd.read_csv(StringIO(response.text), index_col='SYMBOL')
-
-        rename_columns(symbol_meta)
-        symbol_meta = symbol_meta.query('series == "EQ"')
-        symbol_meta = symbol_meta[[
-            'name_of_company', 'isin_number', 'date_of_listing'
-        ]]
-        symbol_meta.date_of_listing = pd.to_datetime(symbol_meta.date_of_listing)
-        symbol_meta.index = symbol_meta.index.str.lower()
-        symbol_meta = symbol_meta.sort_index()
-        symbol_meta['name_of_company'] = symbol_meta['name_of_company'].astype(str)
-        symbol_meta['isin_number'] = symbol_meta['isin_number'].astype(str)
-
-        return symbol_meta
+    __SYMBOL_EOD_DATA_KEY = 'symbol_eod_data'
+    __SYMBOL_EOD_META_KEY = 'symbol_eod_meta'
+    __INDEX_EOD_DATA_KEY = 'index_eod_data'
+    __INDEX_EOD_META_KEY = 'index_eod_meta'
 
     def fetch_eod_data(
             self, symbol, start=None, index=False
@@ -78,6 +51,9 @@ class NSE(object):
             if index:
                 eod_data['prev_close'] = eod_data['Close'].shift(1)
                 eod_data['pct_deliverble'] = 100
+                eod_data['vwap'] = eod_data['Close']
+                eod_data['last'] = eod_data['Close']
+                eod_data['trades'] = 0
             else:
                 eod_data.drop(
                     ['Series', 'Deliverable Volume'], 1, inplace=True
@@ -112,7 +88,7 @@ class NSE(object):
         traded_dates = pd.DataFrame(index=eod_data.index)
         traded_dates['date_count'] = [i+1 for i in range(len(traded_dates))]
 
-        if (len(missing_dates) > 0) and (not index):
+        if len(missing_dates) > 0:
             for i in missing_dates:
                 date_count = traded_dates.loc[i]['date_count']
                 back_date = traded_dates[traded_dates.date_count == date_count-1].index.values[0]
@@ -145,138 +121,34 @@ class NSE(object):
         eod_data.loc[abnormal_condition, ['log_returns']] = (
             (eod_data[abnormal_condition].high_low_spread + eod_data[abnormal_condition].open_close_spread) / (2 * 100)
         )
-
+        eod_data.index.name = 'date'
         eod_data = eod_data.reset_index().set_index(['symbol', 'date'])
         eod_data = eod_data.astype(np.float)
         if index:
-            eod_data = eod_data.drop(['pct_deliverble'], axis=1)
+            eod_data = eod_data.drop(['pct_deliverble', 'vwap', 'last', 'trades'], axis=1)
         return eod_data
-
-    def get_symbol_meta(self):
-        '''
-        If symbol meta data exists grab data from file.
-        Else fetch symbol meta data from NSE website.
-        '''
-        if NSE.SYMBOL_META_KEY in get_store_keys(NSE.NSE_DATA_PATH):
-            symbol_meta = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.SYMBOL_META_KEY)
-        else:
-            warnings.warn(
-                'Unable to read symbol_meta locally. Fetching data from NSE website'
-            )
-            self.force_load_data(force_load='symbol_meta')
-            symbol_meta = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.SYMBOL_META_KEY)
-        return symbol_meta
-
-    def get_index_components(
-            self, index=None, index_type=None
-        ):
-        'Returns the symbols components of passed index or index_type'
-
-        index_meta = self.get_index_meta()
-        index_meta = index_meta.dropna()
-        index_type_list = index_meta.index_type.unique()
-
-        if index is not None:
-            if isinstance(index, str) and index == 'all':
-                index_list = index_meta.index.tolist()
-            elif isinstance(index, str):
-                if index in index_meta.index:
-                    index_list = [index]
-                else:
-                    warnings.warn(
-                        'Could not find {0} index. Loading NIFTY 50'.format(index)
-                    )
-                    index_list = ['nifty_50']
-            elif isinstance(index, list):
-                index_list = index
-        elif index_type is not None:
-            if isinstance(index_type, str) and index_type == 'all':
-                pass
-            elif isinstance(index_type, str):
-                index_meta = index_meta.query(
-                    'index_type == "{0}"'.format(index_type)
-                )
-            elif isinstance(index_type, list):
-                index_meta = index_meta[index_meta.index_type.isin(index_type)]
-            index_list = index_meta.dropna().index.tolist()
-
-        else:
-            warnings.warn(
-                'No suitable index found. Loading Nifty 50 Index components'
-            )
-            index_list = ['nifty_50']
-
-        index_components = pd.DataFrame()
-        for index_type in index_type_list:
-            hdf_key = index_type + '_components'
-            temp_index_components = pd.read_hdf(NSE.NSE_DATA_PATH, hdf_key)
-            temp_index_components = pd.DataFrame(temp_index_components)
-            if index_components.empty:
-                index_components = temp_index_components
-            else:
-                index_components = index_components.join(temp_index_components)
-
-        index_components = index_components[index_list].replace(False, np.nan)
-        index_components = index_components.dropna(how='all')
-        symbol_list = index_components.index.tolist()
-        return symbol_list
 
     def get_symbol_list(
             self, symbol_list=None, index=None, index_type=None, start=None,
-            min_rows=None, missing_count=None
+            min_rows=0, missing_count=0
         ):
         '''
         Get symbol list based on criteria provided.
         Pass index for getting symbols in index.
         List of indexes to get union of symbols of all indexes in list.
         start: {year as int or string, string format of date, None}
-        null_count: {True, False} load symbols listed before start date
+        min_rows: int- get symbols with rows more than min_rows
         '''
-        symbol_meta = self.get_symbol_meta()
-        if symbol_list is None:
-            try:
-                symbol_list = self.symbol_list
-            except:
-                symbol_list = symbol_meta.date_of_listing
-        elif isinstance(symbol_list, str) and symbol_list == 'all':
-            symbol_list = symbol_meta.date_of_listing
-            return symbol_list
-        elif isinstance(symbol_list, str):
-            symbol_list = symbol_meta[symbol_meta.index == symbol_list].date_of_listing
-        elif isinstance(symbol_list, list):
-            symbol_list = symbol_meta[symbol_meta.index.isin(symbol_list)].date_of_listing
-        elif isinstance(symbol_list, pd.Series):
-            symbol_list = symbol_list.copy()
-        elif isinstance(symbol_list, pd.DataFrame):
-            try:
-                symbol_list = symbol_list.date_of_listing.copy()
-            except:
-                warnings.warn('Could not fetch symbol_list with proper dates.\
-                               Loading default symbol_list')
-                symbol_list = symbol_meta.date_of_listing.copy()
-        else:
-            warnings.warn('Could not fetch symbol_list with proper dates.\
-                           Loading default symbol_list')
-            symbol_list = symbol_meta.date_of_listing.copy()
+        symbol_list = super().get_symbol_list(
+            symbol_list=symbol_list, index=index, index_type=index_type, start=start
+        )
 
-        symbol_list = symbol_list.copy()
-        if index is not None or index_type is not None:
-            symbol_list_temp = self.get_index_components(
-                index=index, index_type=index_type
+        if min_rows != 0 or missing_count != 0:
+            symbol_data_meta = self.get_eod_meta(eod_type='symbol')
+            symbol_list = symbol_data_meta.query(
+                'row_count >= @min_rows and missing_count >= @missing_count'
             )
-            symbol_list = symbol_list[symbol_list.index.isin(symbol_list_temp.index)]
-
-        if start is not None:
-            start = get_date(start, 'dt')
-            symbol_list = symbol_list[symbol_list <= start]
-
-        if min_rows is not None:
-            symbol_data_meta = self.get_eod_meta(eod_type='symbol')
-            symbol_list = symbol_list[symbol_data_meta.row_count >= min_rows]
-
-        if missing_count is not None:
-            symbol_data_meta = self.get_eod_meta(eod_type='symbol')
-            symbol_list = symbol_list[symbol_data_meta.missing_count <= missing_count]
+            symbol_list = symbol_list.index.tolist()
 
         # if volume is not None:
         #    volume_data = self.get_symbol_data(data='volume', symbol_list=symbol_list, start=start)
@@ -294,30 +166,28 @@ class NSE(object):
     def get_symbol_eod_data(
             self, symbol_list=None,
             index=None, index_type=None, start=None, end=None,
-            min_rows=None, missing_count=None
+            min_rows=0, missing_count=0
         ):
         '''
         If SYMBOL_DATA_PATH exists grab data from file.
         Update data if data in the file is older than 5 days.
         Else fetch symbol data from NSE website.
         '''
-        if NSE.SYMBOL_EOD_DATA_KEY in get_store_keys(NSE.NSE_DATA_PATH):
-            eod_data = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.SYMBOL_EOD_DATA_KEY)
+        if NSE.__SYMBOL_EOD_DATA_KEY in get_store_keys(NSE.__NSE_DATA_PATH):
+            eod_data = pd.read_hdf(NSE.__NSE_DATA_PATH, NSE.__SYMBOL_EOD_DATA_KEY)
             eod_data = eod_data.reset_index()
         else:
             self.force_load_data(force_load='symbol_eod_data')
-            eod_data = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.SYMBOL_EOD_DATA_KEY)
+            eod_data = pd.read_hdf(NSE.__NSE_DATA_PATH, NSE.__SYMBOL_EOD_DATA_KEY)
             eod_data = eod_data.reset_index()
-
         symbol_list = self.get_symbol_list(
             symbol_list=symbol_list, index=index, index_type=index_type,
             start=start, missing_count=missing_count, min_rows=min_rows
         )
-
-        eod_data = eod_data[eod_data.symbol.isin(symbol_list.index)]
+        eod_data = eod_data[eod_data.symbol.isin(symbol_list)]
         start = get_date(start, out='dt', start=True)
         end = get_date(end, out='dt', start=False)
-        eod_data = eod_data.ix[
+        eod_data = eod_data.loc[
             (eod_data.date >= start) & (eod_data.date <= end)
         ]
         return eod_data
@@ -325,7 +195,7 @@ class NSE(object):
     def get_symbol_eod_values(
             self, data='returns', symbol_list=None,
             index=None, index_type=None, start=None, end=None,
-            min_rows=None, missing_count=None
+            min_rows=0, missing_count=0
         ):
         '''Get Close prices for historical as a separate dataframe'''
 
@@ -350,78 +220,23 @@ class NSE(object):
                 'Invalid type of data requested. Returning returns data'
             )
             values = 'log_returns'
-        if 'symbol_eod_values_{0}'.format(values) in get_store_keys(NSE.NSE_DATA_PATH):
+        if 'symbol_eod_values_{0}'.format(values) in get_store_keys(NSE.__NSE_DATA_PATH):
             data = pd.read_hdf(
-                NSE.NSE_DATA_PATH, 'symbol_eod_values_{0}'.format(values)
+                NSE.__NSE_DATA_PATH, 'symbol_eod_values_{0}'.format(values)
             )
         else:
             self.force_load_data(force_load='symbol_eod_values', values=values)
             data = pd.read_hdf(
-                NSE.NSE_DATA_PATH, 'symbol_eod_values_{0}'.format(values)
+                NSE.__NSE_DATA_PATH, 'symbol_eod_values_{0}'.format(values)
             )
         column_list = data.columns
-        column_list = data.columns.intersection(symbol_list.index)
+        column_list = data.columns.intersection(symbol_list)
         data = data[column_list]
         start = get_date(start, 'str', True)
         end = get_date(end, 'str', False)
         data = data[start:end]
         data = data.dropna(how='all', axis=1)
         return data
-
-    def get_index_meta(self):
-        'Get meta data for index and its components'
-        if NSE.INDEX_META_KEY in get_store_keys(NSE.NSE_DATA_PATH):
-            index_meta = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.INDEX_META_KEY)
-        else:
-            warnings.warn(
-                'Unable to read symbol_meta locally. Fetching data from NSE website'
-            )
-            self.force_load_data(force_load='index_components')
-            index_meta = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.INDEX_META_KEY)
-
-        index_meta = index_meta.replace('nan', np.nan)
-        return index_meta
-
-    def get_index_list(
-            self, index_list=None, index_type=None
-        ):
-        '''Get index list based on passed params'''
-
-        index_meta = self.get_index_meta()
-        if index_list is None:
-            try:
-                index_list = self.index_list
-            except:
-                index_list = index_meta.index_name
-        elif isinstance(index_list, str) and index_list == 'all':
-            index_list = index_meta.index_name
-            return index_list
-        elif isinstance(index_list, str):
-            index_list = index_meta[index_meta.index == index_list].index_name
-        elif isinstance(index_list, list):
-            index_list = index_meta[index_meta.index.isin(index_list)].index_name
-        elif isinstance(index_list, pd.Series):
-            index_list = index_list.copy()
-        elif isinstance(index_list, pd.DataFrame):
-            try:
-                index_list = index_list.index_name.copy()
-            except:
-                warnings.warn('Could not fetch index_list with proper dates.\
-                               Loading default index_list')
-                index_list = index_meta.index_name.copy()
-        else:
-            warnings.warn('Could not fetch index_list with proper dates.\
-                           Loading default index_list')
-            index_list = index_meta.index_name.copy()
-
-        index_list = index_list.copy()
-        if index_type is not None:
-            if isinstance(index_type, str):
-                index_type = [index_type]
-            index_meta = index_meta[index_meta.index_type.isin(index_type)]
-
-        index_list = index_list[index_list.index.isin(index_meta.index)]
-        return index_list
 
     def get_index_eod_data(
             self, index_list=None, index_type=None,
@@ -433,19 +248,19 @@ class NSE(object):
         Update data if data in the file is older than 5 days.
         Else fetch symbol data from NSE website.
         '''
-        if NSE.INDEX_EOD_DATA_KEY in get_store_keys(NSE.NSE_DATA_PATH):
-            eod_data = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.INDEX_EOD_DATA_KEY)
+        if NSE.__INDEX_EOD_DATA_KEY in get_store_keys(NSE.__NSE_DATA_PATH):
+            eod_data = pd.read_hdf(NSE.__NSE_DATA_PATH, NSE.__INDEX_EOD_DATA_KEY)
             eod_data = eod_data.reset_index()
         else:
             self.force_load_data(force_load='index_eod_data')
-            eod_data = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.INDEX_EOD_DATA_KEY)
+            eod_data = pd.read_hdf(NSE.__NSE_DATA_PATH, NSE.__INDEX_EOD_DATA_KEY)
             eod_data = eod_data.reset_index()
 
         index_list = self.get_index_list(
             index_list=index_list, index_type=index_type
         )
 
-        eod_data = eod_data[eod_data.symbol.isin(index_list.index)]
+        eod_data = eod_data[eod_data.symbol.isin(index_list)]
         start = get_date(start, out='dt', start=True)
         end = get_date(end, out='dt', start=False)
         eod_data = eod_data.ix[
@@ -476,40 +291,23 @@ class NSE(object):
                 'Invalid type of data requested. Returning returns data'
             )
             values = 'log_returns'
-        if 'index_eod_values_{0}'.format(values) in get_store_keys(NSE.NSE_DATA_PATH):
+        if 'index_eod_values_{0}'.format(values) in get_store_keys(NSE.__NSE_DATA_PATH):
             data = pd.read_hdf(
-                NSE.NSE_DATA_PATH, 'index_eod_values_{0}'.format(values)
+                NSE.__NSE_DATA_PATH, 'index_eod_values_{0}'.format(values)
             )
         else:
             self.force_load_data(force_load='index_eod_values', values=values)
             data = pd.read_hdf(
-                NSE.NSE_DATA_PATH, 'index_eod_values_{0}'.format(values)
+                NSE.__NSE_DATA_PATH, 'index_eod_values_{0}'.format(values)
             )
         column_list = data.columns
-        column_list = data.columns.intersection(index_list.index)
+        column_list = data.columns.intersection(index_list)
         data = data[column_list]
         start = get_date(start, 'str', True)
         end = get_date(end, 'str', False)
         data = data[start:end]
         data = data.dropna(how='all', axis=1)
         return data
-
-    def get_traded_dates(self, start=None, end=None):
-        'Generate Traded dates for NSE'
-
-        if NSE.TRADED_DATES_KEY in get_store_keys(NSE.NSE_DATA_PATH):
-            traded_dates = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.TRADED_DATES_KEY)
-        else:
-            self.force_load_data('traded_dates')
-            traded_dates = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.TRADED_DATES_KEY)
-
-        start = get_date(start, 'str', True)
-        end = get_date(end, 'str', False)
-
-        traded_dates = traded_dates[start:end]
-        traded_dates['specific_date_count'] = [i+1 for i in range(len(traded_dates))]
-
-        return traded_dates
 
     def get_eod_meta(self, eod_data=None, eod_type='symbol'):
         'Calculate meta data for EOD Data'
@@ -520,11 +318,11 @@ class NSE(object):
                 eod_data_meta = pd.DataFrame(
                     index=symbol_meta.index.copy(),
                 )
-                if NSE.SYMBOL_EOD_META_KEY in get_store_keys(NSE.NSE_DATA_PATH):
-                    eod_data_meta = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.SYMBOL_EOD_META_KEY)
+                if NSE.__SYMBOL_EOD_META_KEY in get_store_keys(NSE.__NSE_DATA_PATH):
+                    eod_data_meta = pd.read_hdf(NSE.__NSE_DATA_PATH, NSE.__SYMBOL_EOD_META_KEY)
                     return eod_data_meta
-                elif NSE.SYMBOL_EOD_DATA_KEY in get_store_keys(NSE.NSE_DATA_PATH):
-                    eod_data = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.SYMBOL_EOD_DATA_KEY)
+                elif NSE.__SYMBOL_EOD_DATA_KEY in get_store_keys(NSE.__NSE_DATA_PATH):
+                    eod_data = pd.read_hdf(NSE.__NSE_DATA_PATH, NSE.__SYMBOL_EOD_DATA_KEY)
                     eod_data = eod_data.reset_index()
                 else:
                     eod_data_meta['from_date'] = pd.to_datetime('1994-01-01')
@@ -539,11 +337,11 @@ class NSE(object):
                 eod_data_meta = pd.DataFrame(
                     index=index_meta.index.copy(),
                 )
-                if NSE.INDEX_EOD_META_KEY in get_store_keys(NSE.NSE_DATA_PATH):
-                    eod_data_meta = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.INDEX_EOD_META_KEY)
+                if NSE.__INDEX_EOD_META_KEY in get_store_keys(NSE.__NSE_DATA_PATH):
+                    eod_data_meta = pd.read_hdf(NSE.__NSE_DATA_PATH, NSE.__INDEX_EOD_META_KEY)
                     return eod_data_meta
-                elif NSE.INDEX_EOD_DATA_KEY in get_store_keys(NSE.NSE_DATA_PATH):
-                    eod_data = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.INDEX_EOD_DATA_KEY)
+                elif NSE.__INDEX_EOD_DATA_KEY in get_store_keys(NSE.__NSE_DATA_PATH):
+                    eod_data = pd.read_hdf(NSE.__NSE_DATA_PATH, NSE.__INDEX_EOD_DATA_KEY)
                     eod_data = eod_data.reset_index()
                 else:
                     eod_data_meta['from_date'] = pd.to_datetime('1994-01-01')
@@ -599,202 +397,19 @@ class NSE(object):
 
     def force_load_data(self, force_load, values=None):
         '''
-        Force loading helper method for saving data from NSE Website to local HDFStores
+        Force loading helper method for saving EOD data from NSE Website to local HDFStores
         '''
 
-        if force_load == 'symbol_meta':
-            print('Loading Symbol Meta data from NSE website')
-            symbol_meta = self.fetch_symbol_meta()
-            if not os.path.isdir(os.path.join(NSE.CURRENT_PATH, 'data')):
-                os.mkdir(os.path.join(NSE.CURRENT_PATH, 'data'))
-            symbol_meta.to_hdf(NSE.NSE_DATA_PATH, NSE.SYMBOL_META_KEY)
-            self.force_load_data('index_components')
-
-        elif force_load == 'index_components':
-            print('Loading Index components data from NSE website')
-            symbol_meta = self.get_symbol_meta()
-            symbol_meta['industry'] = np.nan
-            session = requests.session()
-            url = 'https://www.nseindia.com/products/content/equities/indices/historical_index_data.htm'
-            response = session.get(url)
-            if response.status_code != 200:
-                print(
-                    'Unable to load base url data due to {0} status code'
-                    .format(response.status_code)
-                )
-                return
-            soup = BeautifulSoup(response.text, 'html.parser')
-            index_meta = pd.DataFrame(
-                columns=['index_code', 'index_name', 'index_type', 'url', 'number_of_symbols']
-            )
-            index_type_group = soup.find('select', {'id': 'indexType'})
-            index_type_group = index_type_group.find_all('optgroup')
-            for index_type in index_type_group:
-                index_type_label = index_type['label'].strip()
-                index_type_label = index_type_label.split(' ')
-                index_type_label = '_'.join(index_type_label[0:-1]).lower()
-                index_type_label = index_type_label.replace('strategy', 'strategic')
-                index_list = index_type.find_all('option')
-                for index in index_list:
-                    index_code = index['value'].strip()
-                    index_code_asindex = index_code.lower().replace(' ', '_').replace('%', '')
-                    index_name = index.text.strip()
-                    index_meta.loc[index_code_asindex] = [
-                        index_code, index_name, index_type_label, np.nan, np.nan
-                    ]
-                if index_type_label != 'broad_market':
-                    index_components_data = pd.DataFrame(index=symbol_meta.index)
-                    info_url = 'https://www.nseindia.com/products/content/equities/indices/{0}_indices.htm'
-                    response = session.get(info_url.format(index_type_label))
-                    if response.status_code != 200:
-                        print(
-                            'Unable to load url data for {0} index type due to {1} status code'
-                            .format(index_type_label, response.status_code)
-                        )
-                        continue
-                    soup = BeautifulSoup(response.text, 'html.parser')
-                    content = soup.find('div', {'class': 'abt_equities_content'})
-                    download_links = content.find_all('a', {'class': 'download'})
-                    for link in download_links:
-                        text = link.text
-                        text = re.sub(r'\r\n', ' ', text)
-                        text = re.sub(' +', ' ', text)
-                        text = text[text.find('NIFTY'): text.find('Index')]
-                        if text[-3:] == 'csv':
-                            text = text[text.find('NIFTY'): text.find('stocks')]
-                        if text[-2:] == 'cs':
-                            text = text[text.find('NIFTY'): text.find('Indices')]
-                        text = text.lower().strip()
-                        link = link['href']
-                        link = 'https://www.nseindia.com' + link
-                        if link[-3:] == 'csv':
-                            try:
-                                index = index_meta[index_meta.index_name.str.lower() == text].index[0]
-                            except:
-                                warnings.warn(
-                                    '{0} index not found in index_meta table'.format(text)
-                                )
-                                continue
-                            response = session.get(link)
-                            if response.status_code != 200:
-                                print(
-                                    'Unable to fetch csv data for {0} index due to {1} status code'
-                                    .format(index, response.status_code)
-                                )
-                                continue
-                            index_components = pd.read_csv(StringIO(response.text), index_col='Symbol')
-                            index_components.index = index_components.index.str.lower()
-                            symbol_meta['industry'] = symbol_meta['industry'].fillna(index_components['Industry'])
-                            index_meta.loc[index, 'url'] = link
-                            index_meta.loc[index, 'number_of_symbols'] = len(index_components)
-                            index_components = pd.Series(True, index=index_components.index, name=index)
-                            index_components_data = index_components_data.join(index_components)
-                            print(
-                                'Component data loaded successfully for {0}'.format(index)
-                            )
-                elif index_type_label == 'broad_market':
-                    index_components_data = pd.DataFrame(index=symbol_meta.index)
-                    info_url = 'https://www.nseindia.com/products/content/equities/indices/broad_indices.htm'
-                    response = session.get(info_url.format(index_type_label))
-                    soup = BeautifulSoup(response.text, 'html.parser')
-                    content = soup.find('div', {'class': 'content'})
-                    download_links = content.find_all('a')
-                    for link in download_links:
-                        text = link.text
-                        text = re.sub(r'\r\n', ' ', text)
-                        text = re.sub(' +', ' ', text)
-                        text = text[text.find('NIFTY'): text.find('Index')]
-                        if text[-3:] == 'csv':
-                            text = text[text.find('NIFTY'): text.find('stocks')]
-                        if text[-2:] == 'cs':
-                            text = text[text.find('NIFTY'): text.find('Indices')]
-                        text = text.lower().strip()
-                        link = link['href']
-                        link = 'https://www.nseindia.com/products/content/equities/indices/' + link
-                        try:
-                            index = index_meta[index_meta.index_name.str.lower() == text].index[0]
-                        except:
-                            warnings.warn(
-                                '{0} index not found in index_meta table'.format(text)
-                            )
-                            continue
-                        response = session.get(link)
-                        soup = BeautifulSoup(response.text, 'html.parser')
-                        link_list = soup.find_all('a', {'class': 'download'})
-                        for link in link_list:
-                            link = link['href']
-                            if link[-3:] == 'csv':
-                                csv_link = 'https://www.nseindia.com' + link
-                                break
-                        response = session.get(csv_link)
-                        if response.status_code != 200:
-                            print(
-                                'Unable to fetch csv data for {0} index due to {1} status code'
-                                .format(index, response.status_code)
-                            )
-                            continue
-                        index_components = pd.read_csv(StringIO(response.text), index_col='Symbol')
-                        index_components.index = index_components.index.str.lower()
-                        symbol_meta['industry'] = symbol_meta['industry'].fillna(index_components['Industry'])
-                        index_meta.loc[index, 'url'] = link
-                        index_meta.loc[index, 'number_of_symbols'] = len(index_components)
-                        index_components = pd.Series(True, index=index_components.index, name=index)
-                        index_components_data = index_components_data.join(index_components)
-                        print(
-                            'Component data loaded successfully for {0}'.format(index)
-                        )
-                index_components_data = index_components_data.fillna(False).astype(bool)
-                hdf_key = index_type_label + '_components'
-                index_components_data.to_hdf(NSE.NSE_DATA_PATH, hdf_key)
-            symbol_meta['name_of_company'] = symbol_meta['name_of_company'].astype(str)
-            symbol_meta['isin_number'] = symbol_meta['isin_number'].astype(str)
-            symbol_meta['industry'] = symbol_meta['industry'].fillna('unknown')
-            symbol_meta['industry'] = symbol_meta['industry'].str.lower().str.replace(' ', '_')
-            symbol_meta.to_hdf(NSE.NSE_DATA_PATH, NSE.SYMBOL_META_KEY)
-            index_meta = index_meta.astype(str)
-            index_meta.to_hdf(NSE.NSE_DATA_PATH, NSE.INDEX_META_KEY)
-
-        elif force_load == 'traded_dates':
-            print('Updating traded dates')
-            if ((NSE.SYMBOL_EOD_DATA_KEY in get_store_keys(NSE.NSE_DATA_PATH)) and
-                    NSE.INDEX_EOD_DATA_KEY in  get_store_keys(NSE.NSE_DATA_PATH)):
-                eod_data = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.SYMBOL_EOD_DATA_KEY)
-                eod_data = eod_data.reset_index()
-                traded_dates = eod_data.date.unique()
-                traded_dates_symbol = pd.to_datetime(traded_dates)
-
-                eod_data = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.INDEX_EOD_DATA_KEY)
-                eod_data = eod_data.reset_index()
-                traded_dates = eod_data.date.unique()
-                traded_dates_index = pd.to_datetime(traded_dates)
-
-                traded_dates = traded_dates_symbol.union(traded_dates_index)
-            else:
-                traded_dates = pd.read_hdf(NSE.CONSTANTS_PATH, NSE.TRADED_DATES_KEY)
-                traded_dates = traded_dates.index
-
-            traded_dates = pd.DataFrame(index=traded_dates)
-            traded_dates['date'] = traded_dates.index
-            traded_dates['date_count'] = [i+1 for i in range(len(traded_dates))]
-            traded_dates['day'] = traded_dates.date.dt.day
-            traded_dates['month'] = traded_dates.date.dt.month
-            traded_dates['year'] = traded_dates.date.dt.year
-            traded_dates['day_of_week'] = traded_dates.date.dt.dayofweek
-            traded_dates['day_of_year'] = traded_dates.date.dt.dayofyear
-            traded_dates['week_of_year'] = traded_dates.date.dt.week
-            traded_dates = traded_dates.drop(['date'], axis=1)
-            traded_dates.to_hdf(NSE.NSE_DATA_PATH, NSE.TRADED_DATES_KEY)
-
-        elif force_load == 'symbol_eod_meta':
+        if force_load == 'symbol_eod_meta':
             print('Updating symbol eod metadata')
-            if NSE.SYMBOL_EOD_DATA_KEY in get_store_keys(NSE.NSE_DATA_PATH):
-                eod_data = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.SYMBOL_EOD_DATA_KEY)
+            if NSE.__SYMBOL_EOD_DATA_KEY in get_store_keys(NSE.__NSE_DATA_PATH):
+                eod_data = pd.read_hdf(NSE.__NSE_DATA_PATH, NSE.__SYMBOL_EOD_DATA_KEY)
                 eod_data = eod_data.reset_index()
             else:
                 eod_data = None
 
             eod_data_meta = self.get_eod_meta(eod_data, eod_type='symbol')
-            eod_data_meta.to_hdf(NSE.NSE_DATA_PATH, NSE.SYMBOL_EOD_META_KEY)
+            eod_data_meta.to_hdf(NSE.__NSE_DATA_PATH, NSE.__SYMBOL_EOD_META_KEY)
 
         elif force_load == 'symbol_eod_data':
             eod_data_meta = self.get_eod_meta(eod_type='symbol')
@@ -804,8 +419,12 @@ class NSE(object):
             ]
 
             # return if less indices need to be refreshed
-            if len(eod_data_meta) < 20:
+            if len(eod_data_meta) < 120:
+                print(eod_data_meta.row_count)
                 return
+
+            if len(eod_data_meta) > 500:
+                eod_data_meta = eod_data_meta.ix[0:200]
 
             print('Fetching Data from NSE website for {0} symbols'.format(len(eod_data_meta)))
 
@@ -828,8 +447,8 @@ class NSE(object):
                     )
                     fresh_eod_data = fresh_eod_data.append(eod_data)
 
-            if NSE.SYMBOL_EOD_DATA_KEY in get_store_keys(NSE.NSE_DATA_PATH):
-                old_eod_data = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.SYMBOL_EOD_DATA_KEY)
+            if NSE.__SYMBOL_EOD_DATA_KEY in get_store_keys(NSE.__NSE_DATA_PATH):
+                old_eod_data = pd.read_hdf(NSE.__NSE_DATA_PATH, NSE.__SYMBOL_EOD_DATA_KEY)
                 old_eod_data = old_eod_data.reset_index()
             else:
                 old_eod_data = pd.DataFrame()
@@ -847,9 +466,9 @@ class NSE(object):
             ]
             fresh_eod_data = fresh_eod_data.reset_index()[eod_data_schema]
             fresh_eod_data = fresh_eod_data.set_index(['symbol', 'date'])
-            fresh_eod_data.to_hdf(NSE.NSE_DATA_PATH, NSE.SYMBOL_EOD_DATA_KEY)
+            fresh_eod_data.to_hdf(NSE.__NSE_DATA_PATH, NSE.__SYMBOL_EOD_DATA_KEY)
             del fresh_eod_data
-            self.force_load_data('sybol_eod_meta')
+            self.force_load_data('symbol_eod_meta')
             self.force_load_data('traded_dates')
             eod_data_meta = self.get_eod_meta(eod_type='symbol')
             date_diff = (TODAY - eod_data_meta.to_date).dt.days
@@ -865,7 +484,7 @@ class NSE(object):
             ]
             for column in eod_data_columns:
                 self.force_load_data(force_load='symbol_eod_values', values=column)
-            clean_file(NSE.NSE_DATA_PATH)
+            # clean_file(NSE.__NSE_DATA_PATH)
 
         elif force_load == 'symbol_eod_values':
             print('Generating time series data for {0} from local data'.format(values))
@@ -873,18 +492,18 @@ class NSE(object):
 
             data = pd.pivot_table(data=eod_data, index='date',
                                   columns='symbol', values=values)
-            data.to_hdf(NSE.NSE_DATA_PATH, 'symbol_eod_values_{0}'.format(values))
+            data.to_hdf(NSE.__NSE_DATA_PATH, 'symbol_eod_values_{0}'.format(values))
 
         elif force_load == 'index_eod_meta':
             print('Updating index eod metadata')
-            if NSE.INDEX_EOD_DATA_KEY in get_store_keys(NSE.NSE_DATA_PATH):
-                eod_data = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.INDEX_EOD_DATA_KEY)
+            if NSE.__INDEX_EOD_DATA_KEY in get_store_keys(NSE.__NSE_DATA_PATH):
+                eod_data = pd.read_hdf(NSE.__NSE_DATA_PATH, NSE.__INDEX_EOD_DATA_KEY)
                 eod_data = eod_data.reset_index()
             else:
                 eod_data = None
 
             eod_data_meta = self.get_eod_meta(eod_data, eod_type='index')
-            eod_data_meta.to_hdf(NSE.NSE_DATA_PATH, NSE.INDEX_EOD_META_KEY)
+            eod_data_meta.to_hdf(NSE.__NSE_DATA_PATH, NSE.__INDEX_EOD_META_KEY)
 
         elif force_load == 'index_eod_data':
             eod_data_meta = self.get_eod_meta(eod_type='index')
@@ -923,8 +542,8 @@ class NSE(object):
             if fresh_eod_data.empty:
                 return
 
-            if NSE.INDEX_EOD_DATA_KEY in get_store_keys(NSE.NSE_DATA_PATH):
-                old_eod_data = pd.read_hdf(NSE.NSE_DATA_PATH, NSE.INDEX_EOD_DATA_KEY)
+            if NSE.__INDEX_EOD_DATA_KEY in get_store_keys(NSE.__NSE_DATA_PATH):
+                old_eod_data = pd.read_hdf(NSE.__NSE_DATA_PATH, NSE.__INDEX_EOD_DATA_KEY)
                 old_eod_data = old_eod_data.reset_index()
             else:
                 old_eod_data = pd.DataFrame()
@@ -941,7 +560,7 @@ class NSE(object):
             ]
             fresh_eod_data = fresh_eod_data.reset_index()[eod_data_schema]
             fresh_eod_data = fresh_eod_data.set_index(['symbol', 'date'])
-            fresh_eod_data.to_hdf(NSE.NSE_DATA_PATH, NSE.INDEX_EOD_DATA_KEY)
+            fresh_eod_data.to_hdf(NSE.__NSE_DATA_PATH, NSE.__INDEX_EOD_DATA_KEY)
             del fresh_eod_data
             self.force_load_data('index_eod_meta')
             self.force_load_data('traded_dates')
@@ -959,7 +578,7 @@ class NSE(object):
             ]
             for column in eod_data_columns:
                 self.force_load_data(force_load='index_eod_values', values=column)
-            clean_file(NSE.NSE_DATA_PATH)
+            clean_file(NSE.__NSE_DATA_PATH)
 
         elif force_load == 'index_eod_values':
             print('Generating time series data for {0} from local data'.format(values))
@@ -967,32 +586,29 @@ class NSE(object):
 
             data = pd.pivot_table(data=eod_data, index='date',
                                   columns='symbol', values=values)
-            data.to_hdf(NSE.NSE_DATA_PATH, 'index_eod_values_{0}'.format(values))
+            data.to_hdf(NSE.__NSE_DATA_PATH, 'index_eod_values_{0}'.format(values))
 
 
         elif force_load == 'all':
-            self.force_load_data('symbol_meta')
             self.force_load_data('traded_dates')
             self.force_load_data('symbol_eod_data')
             self.force_load_data('index_eod_data')
+        else:
+            super().force_load_data(force_load)
     def __init__(
             self, symbol_list=None, index=None, index_type=None,
             start=None, end=None,
-            min_rows=None, missing_count=None,
+            min_rows=0, missing_count=0,
             force_load=None,
         ):
+        super().__init__(
+            symbol_list=symbol_list, index=index, index_type=index_type,
+            start=start, end=end, force_load=force_load
+        )
         if force_load is not None:
             self.force_load_data(force_load)
-        self.symbol_meta = self.get_symbol_meta()
-        self.index_meta = self.get_index_meta()
-        self.start = get_date(start, start=True)
-        self.end = get_date(end, start=False)
-        self.traded_dates = self.get_traded_dates(start=start, end=end)
 
         self.symbol_list = self.get_symbol_list(
             symbol_list=symbol_list, index=index, index_type=index_type,
             start=start, min_rows=min_rows, missing_count=missing_count
-        )
-        self.index_list = self.get_index_list(
-            index_list=index, index_type=index_type
         )

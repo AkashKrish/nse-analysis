@@ -115,6 +115,9 @@ class Portfolio(NSE):
         return co_var / benchmark_returns.var()
 
     def alpha(self, returns, benchmark_returns):
+        '''
+        Calculate alpha using beta and risk free rate between returns and benchmark_returns
+        '''
         returns = pd.DataFrame(returns).copy()
         benchmark_returns = pd.DataFrame(benchmark_returns).copy()
 
@@ -124,6 +127,29 @@ class Portfolio(NSE):
         for benchmark in market_mean.columns:
             market_mean[benchmark] = returns.mean() - market_mean[benchmark]
         return market_mean
+
+    def basic_regression(self, returns, benchmark_returns):
+        '''
+        Calculate basic regression measures between returns and benchmark_returns
+        '''
+        returns = pd.DataFrame(returns.dropna())
+        benchmark_returns = pd.DataFrame(benchmark_returns.dropna())
+        common_index = np.intersect1d(returns.index, benchmark_returns.index)
+        returns = returns.loc[common_index]
+        benchmark_returns = benchmark_returns.loc[common_index]
+        rf_returns, _ = self.set_risk_free_rate(returns)
+        rf_benchmark, _ = self.set_risk_free_rate(benchmark_returns)
+        returns = returns - rf_returns
+        benchmark_returns = benchmark_returns - rf_benchmark
+        slope, intercept, r_value, _, _ = stats.linregress(
+            y=returns.ix[:, 0], x=benchmark_returns.ix[:, 0]
+        )
+        std_dev = returns.std().values[0]
+        regression_measures = pd.DataFrame(
+            [[returns.columns[0], benchmark_returns.columns[0], intercept, slope, std_dev, r_value**2]],
+            columns=['symbol', 'benchmark', 'alpha', 'beta', 'std_dev', 'r_square']
+        )
+        return regression_measures
 
     # def calcluate_capm_interval(
     #         self, returns, benchmark_returns,

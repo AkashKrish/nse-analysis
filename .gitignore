@@ -1,4 +1,8 @@
 */
-*.h5
 !source/
 !ipynb/
+!source/data/
+*.h5
+*.xlsx
+*.csv
+!constants.h5

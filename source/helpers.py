@@ -1,6 +1,6 @@
 '''Helper Methods for analysis'''
 import os
-import warnings
+# import warnings
 from datetime import datetime
 
 # import numpy as np
@@ -145,3 +145,19 @@ def get_date(date=None, out='dt', start=True):
     if out == 'str':
         date = date.strftime('%Y-%m-%d')
     return date
+
+
+def get_adjacent_dates(index, date):
+    '''Returns previous_date and next_date for specified date'''
+    date = get_date(date=date, out='dt')
+    date_loc = index.get_loc(date)
+    if date_loc == len(index) - 1:
+        prev_date = index[date_loc - 1]
+        next_date = None
+    elif date_loc == 0:
+        prev_date = None
+        next_date = index[date_loc + 1]
+    else:
+        prev_date = index[date_loc - 1]
+        next_date = index[date_loc + 1]
+    return prev_date, next_date
